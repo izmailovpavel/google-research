@@ -17,19 +17,20 @@
 
 from typing import Callable
 
-import haiku as hk
 import jax
 from jax.experimental import optix
 import jax.numpy as jnp
 import numpy as onp
+import pickle
 
-from bnn_hmc import data
 from bnn_hmc import hmc
 from bnn_hmc import nn_loss
+import re
 
 
 LRSchedule = Callable[[jnp.ndarray], jnp.ndarray]
 Opt = optix.GradientTransformation
+_CKPT_FORMAT_STRING = "model_step_{}.pt"
 
 
 def make_cosine_lr_schedule(init_lr,
@@ -97,3 +98,37 @@ def make_ckpt_dict(params, key, step_size, trajectory_len):
 def parse_ckpt_dict(ckpt_dict):
   field_names = ["params", "key", "step_size", "traj_len"]
   return [ckpt_dict[name] for name in field_names]
+
+
+def load_ckpt(path):
+    with open(path) as f:
+        ckpt_dict = pickle.load(f)
+    return parse_ckpt_dict(ckpt_dict)
+
+
+def save_ckpt(path, ckpt_dict):
+    with open(path) as f:
+        pickle.dump(ckpt_dict, f)
+
+
+def _ckpt_pattern():
+    pattern_string = _CKPT_FORMAT_STRING.format("(?P<step>[0-9]+)")
+    return re.compile(pattern_string)
+
+
+def _match_ckpt_pattern(name):
+    pattern = _ckpt_pattern
+    return pattern.match(name)
+
+
+def name_is_ckpt(name):
+    return bool(_match_ckpt_pattern(name))
+
+
+def parse_ckpt_name(name):
+    match = _match_ckpt_pattern(name)
+    return match.group("step")
+
+
+def make_ckpt_name(step):
+    return _CKPT_FORMAT_STRING.format(step)
