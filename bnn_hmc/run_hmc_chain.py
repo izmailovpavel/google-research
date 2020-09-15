@@ -7,6 +7,9 @@ import haiku as hk
 import jax
 import tensorflow.compat.v2 as tf
 import argparse
+import time
+import tabulate
+from collections import OrderedDict
 
 from bnn_hmc import data
 from bnn_hmc import models
@@ -31,6 +34,8 @@ parser.add_argument("--init_checkpoint", type=str, default=None,
                     help="Checkpoint to use for initialization of the chain")
 parser.add_argument("--eval_freq", type=int, default=10,
                     help="Frequency of evaluations")
+parser.add_argument("--tabulate_freq", type=int, default=40,
+                    help="Frequency of tabulate table header prints")
 parser.add_argument("--dir", type=str, default=None, required=True,
                     help="Directory for checkpoints and tensorboard logs")
 parser.add_argument("--dataset_name", type=str, default="cifar10",
@@ -51,7 +56,8 @@ def train_model():
         args.seed, args.weight_decay, args.step_size, args.trajectory_len,
         args.num_iterations)
     dirname = os.path.join(args.dir, subdirname)
-    with open(os.path.join(dirname, "comand.sh")) as f:
+    os.makedirs(dirname, exist_ok=True)
+    with open(os.path.join(dirname, "comand.sh"), "w") as f:
         f.write(" ".join(sys.argv))
         f.write("\n")
 
@@ -67,6 +73,7 @@ def train_model():
                                              likelihood_fn, prior_fn))
 
     checkpoints = filter(train_utils.name_is_ckpt, os.listdir(dirname))
+    checkpoints = list(checkpoints)
     if checkpoints:
         print("Continuing the run from the last saved checkpoint")
         checkpoint_iteration = map(train_utils.parse_ckpt_name, checkpoints)
@@ -93,12 +100,16 @@ def train_model():
             params = net.init(net_init_key, init_data)
 
     log_prob, state_grad = log_prob_and_grad_fn(params)
+    tabulate_columns = ["iteration", "train_logprob", "train_acc", "test_logprob",
+                        "test_acc", "step_size", "accept_prob", "time"]
 
     for iteration in range(start_iteration, args.num_iterations):
+        start_time = time.time() 
         params, log_prob, state_grad, step_size, key, accept_prob = (
             update_fn(params, log_prob, state_grad,
                       key, step_size, trajectory_len)
         )
+        iteration_time = time.time() - start_time
 
         with tf_writer.as_default():
             tf.summary.scalar("train/log_prob", log_prob, step=iteration)
@@ -106,6 +117,13 @@ def train_model():
             tf.summary.scalar("hypers/trajectory_len", trajectory_len,
                               step=iteration)
             tf.summary.scalar("debug/accept_prob", accept_prob, step=iteration)
+
+        tabulate_dict = OrderedDict(zip(tabulate_columns, [None]*len(tabulate_columns)))
+        tabulate_dict["iteration"] = iteration
+        tabulate_dict["train_logprob"] = log_prob
+        tabulate_dict["step_size"] = step_size
+        tabulate_dict["accept_prob"] = accept_prob
+        tabulate_dict["time"] = iteration_time
 
         checkpoint_name = train_utils.make_ckpt_name(iteration)
         checkpoint_path = os.path.join(dirname, checkpoint_name)
@@ -120,7 +138,20 @@ def train_model():
                                   step=iteration)
                 tf.summary.scalar("train/accuracy", train_acc, step=iteration)
                 tf.summary.scalar("test/accuracy", test_acc, step=iteration)
+        
+            tabulate_dict["test_logprob"] = test_log_prob
+            tabulate_dict["train_acc"] = train_acc
+            tabulate_dict["test_acc"] = test_acc
+
+        table = tabulate.tabulate([tabulate_dict.values()], tabulate_dict.keys(), tablefmt='simple', floatfmt='8.7f')
+        if (iteration - start_iteration) % args.tabulate_freq == 0:
+            table = table.split('\n')
+            table = '\n'.join([table[1]] + table)
+        else:
+            table = table.split('\n')[2]
+        print(table)
 
 
 if __name__ == "__main__":
+    print("JAX sees the following devices:", jax.devices())
     train_model()

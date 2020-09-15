@@ -101,13 +101,13 @@ def parse_ckpt_dict(ckpt_dict):
 
 
 def load_ckpt(path):
-    with open(path) as f:
+    with open(path, "rb") as f:
         ckpt_dict = pickle.load(f)
     return parse_ckpt_dict(ckpt_dict)
 
 
 def save_ckpt(path, ckpt_dict):
-    with open(path) as f:
+    with open(path, "wb") as f:
         pickle.dump(ckpt_dict, f)
 
 
@@ -117,7 +117,7 @@ def _ckpt_pattern():
 
 
 def _match_ckpt_pattern(name):
-    pattern = _ckpt_pattern
+    pattern = _ckpt_pattern()
     return pattern.match(name)
 
 
@@ -127,7 +127,7 @@ def name_is_ckpt(name):
 
 def parse_ckpt_name(name):
     match = _match_ckpt_pattern(name)
-    return match.group("step")
+    return int(match.group("step"))
 
 
 def make_ckpt_name(step):
