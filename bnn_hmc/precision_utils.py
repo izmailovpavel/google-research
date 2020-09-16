@@ -1,0 +1,15 @@
+from jax import lax
+
+
+def high_precision_dot_general(*args, **kwargs):
+  kwargs.pop('precision')
+  return lax.dot_general(*args, precision=lax.Precision.HIGH, **kwargs)
+
+
+def high_precision_conv_general_dilated(*args, **kwargs):
+  kwargs.pop('precision')
+  return lax.conv_general_dilated(*args, precision=lax.Precision.HIGH, **kwargs)
+
+
+HIGH_PRECISION_RULES = {lax.dot_general_p: high_precision_dot_general,
+	           lax.conv_general_dilated: high_precision_conv_general_dilated}

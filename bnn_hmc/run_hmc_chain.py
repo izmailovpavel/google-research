@@ -10,11 +10,13 @@ import argparse
 import time
 import tabulate
 from collections import OrderedDict
+from jax.experimental.callback import rewrite
 
 from bnn_hmc import data
 from bnn_hmc import models
 from bnn_hmc import nn_loss
 from bnn_hmc import train_utils
+from bnn_hmc import precision_utils
 
 
 parser = argparse.ArgumentParser(description="Run an HMC chain on a cloud TPU")
@@ -64,10 +66,14 @@ def train_model():
     tf_writer = tf.summary.create_file_writer(dirname)
 
     net_fn = _MODEL_FNS[args.model_name]
+    net_fn = jax.experimental.callback.rewrite(
+  			net_fn,
+  			precision_utils.HIGH_PRECISION_RULES)
     net = hk.transform(net_fn)
     train_set, test_set, _ = data.make_ds_pmap_fullbatch(name=args.dataset_name)
     likelihood_fn = nn_loss.xent_likelihood
     prior_fn = nn_loss.make_gaussian_prior(weight_decay=args.weight_decay)
+
     update_fn, eval_fn, log_prob_and_grad_fn = (
         train_utils.make_hmc_update_eval_fns(net, train_set, test_set,
                                              likelihood_fn, prior_fn))

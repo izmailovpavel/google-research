@@ -22,10 +22,10 @@ from jax.experimental import optix
 import jax.numpy as jnp
 import numpy as onp
 import pickle
+import re
 
 from bnn_hmc import hmc
 from bnn_hmc import nn_loss
-import re
 
 
 LRSchedule = Callable[[jnp.ndarray], jnp.ndarray]
@@ -68,6 +68,7 @@ def make_hmc_update_eval_fns(net,
     log_prob, acc = nn_loss.pmap_get_loss_and_acc(net, params_p, likelihood_fn,
                                                   prior_fn, dataset)
     return -log_prob[0], acc[0]
+
 
   hmc_update = hmc.make_adaptive_hmc_update(log_prob_and_grad_fn)
 
