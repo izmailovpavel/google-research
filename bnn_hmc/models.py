@@ -28,6 +28,7 @@ def lenet_fn(batch):
   """Network inspired by LeNet-5."""
   x, _ = batch
   x = x.astype(jnp.float32)
+
   cnn = hk.Sequential([
       hk.Conv2D(output_channels=32, kernel_shape=5, padding="SAME"),
       jax.nn.relu,

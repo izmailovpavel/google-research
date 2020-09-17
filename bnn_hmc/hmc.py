@@ -68,7 +68,7 @@ def make_adaptive_hmc_update(log_prob_and_grad_fn):
                           key,
                           step_size,
                           trajectory_len,
-                          target_accept_rate=0.8,
+                          target_accept_rate=0.5,
                           step_size_adaptation_speed=0.05,
                           max_n_leapfrog=1000,
                           jitter_amt=0.2):

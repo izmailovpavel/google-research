@@ -33,8 +33,7 @@ PriorFn = Callable[[hk.Params], jnp.array]
 LikelihoodFn = Callable[[hk.Transformed, hk.Params, Batch], LossAcc]
 
 
-def xent_likelihood(net, params,
-                    batch):
+def xent_likelihood(net, params, batch):
   """Computes the negative log-likelihood."""
   _, y = batch
   logits = net.apply(params, None, batch)
@@ -46,6 +45,17 @@ def xent_likelihood(net, params,
 
 
 def make_gaussian_prior(weight_decay):
+  """Returns the prior function given weight decay."""
+  def prior(params):
+    """Computes the Gaussian prior negative log-density."""
+    n_params = sum([p.size for p in jax.tree_leaves(params)])
+    return (0.5 * tree_utils.tree_dot(params, params) * weight_decay +
+            0.5 * n_params * jnp.log(weight_decay / (2 * math.pi)))
+
+  return prior
+
+
+def make_gaussian_prior_highprecision(weight_decay):
   """Returns the prior function given weight decay."""
   def prior(params):
     """Computes the Gaussian prior negative log-density."""
