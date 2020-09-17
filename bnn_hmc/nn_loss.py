@@ -33,64 +33,59 @@ PriorFn = Callable[[hk.Params], jnp.array]
 LikelihoodFn = Callable[[hk.Transformed, hk.Params, Batch], LossAcc]
 
 
-def xent_likelihood(net, params, batch):
+def xent_log_likelihood(net, params, batch):
   """Computes the negative log-likelihood."""
   _, y = batch
   logits = net.apply(params, None, batch)
   labels = jax.nn.one_hot(y, 10)
-  softmax_xent = -jnp.sum(labels * jax.nn.log_softmax(logits))
+  softmax_xent = jnp.sum(labels * jax.nn.log_softmax(logits))
 
   accuracy = jnp.mean(jnp.argmax(logits, axis=-1) == y)
   return softmax_xent, accuracy
 
 
-def make_gaussian_prior(weight_decay):
+def make_gaussian_log_prior(weight_decay):
   """Returns the prior function given weight decay."""
-  def prior(params):
-    """Computes the Gaussian prior negative log-density."""
+  def log_prior(params):
+    """Computes the Gaussian prior log-density."""
     n_params = sum([p.size for p in jax.tree_leaves(params)])
-    return (0.5 * tree_utils.tree_dot(params, params) * weight_decay +
-            0.5 * n_params * jnp.log(weight_decay / (2 * math.pi)))
+    return -(0.5 * tree_utils.tree_dot(params, params) * weight_decay +
+             0.5 * n_params * jnp.log(weight_decay / (2 * math.pi)))
 
-  return prior
+  return log_prior
 
 
-def make_gaussian_prior_difference(weight_decay):
+def make_gaussian_log_prior_difference(weight_decay):
   """Returns the function that computes the difference in prior."""
   def prior_diff(params1, params2):
     """Computes the delta in  Gaussian prior negative log-density."""
     diff = sum([jnp.sum(p1**2 - p2**2) for p1, p2 in
                 zip(jax.tree_leaves(params1), jax.tree_leaves(params2))])
-    return (0.5 * weight_decay * diff) 
+    return -0.5 * weight_decay * diff
 
   return prior_diff
 
 
 @functools.partial(
-    jax.pmap, axis_name='i', static_broadcasted_argnums=[0, 2, 3])
-def pmap_get_loss_acc_grad(net, params,
-                           likelihood_fn,
-                           prior_fn, dataset):
-  """Computes loss value, accuracy and gradient via pmap."""
-
-  loss_acc_val_grad = jax.value_and_grad(likelihood_fn, has_aux=True, argnums=1)
-  (likelihood, acc), likelihood_grad = loss_acc_val_grad(net, params, dataset)
-  prior, prior_grad = jax.value_and_grad(prior_fn)(params)
-
-  acc = jax.lax.pmean(acc, axis_name='i')
+    jax.pmap, axis_name='i', static_broadcasted_argnums=[0, 2],
+    in_axes=(None, None, None, 0)
+)
+def pmap_get_log_likelihood_and_grad(net, params, likelihood_fn, dataset):
+  loss_acc_val_grad = jax.value_and_grad(likelihood_fn, has_aux=True,
+                                         argnums=1)
+  (likelihood, _), likelihood_grad = loss_acc_val_grad(net, params, dataset)
   likelihood = jax.lax.psum(likelihood, axis_name='i')
   likelihood_grad = jax.lax.psum(likelihood_grad, axis_name='i')
-
-  return likelihood + prior, acc, tree_utils.tree_add(likelihood_grad,
-                                                      prior_grad)
+  return likelihood, likelihood_grad
 
 
 @functools.partial(
-    jax.pmap, axis_name='i', static_broadcasted_argnums=[0, 2, 3])
-def pmap_get_loss_and_acc(net, params,
-                          likelihood_fn,
-                          prior_fn, dataset):
-  """Computes loss value and accuracy via pmap."""
+    jax.pmap, axis_name='i', static_broadcasted_argnums=[0, 2, 3],
+    in_axes=(None, None, None, None, 0)
+)
+def pmap_get_log_prob_and_accuracy(
+    net, params, likelihood_fn, prior_fn, dataset):
+  """Computes posterior density value and accuracy via pmap."""
 
   likelihood, acc = likelihood_fn(net, params, dataset)
   prior = prior_fn(params)
@@ -103,8 +98,10 @@ def pmap_get_loss_and_acc(net, params,
 
 
 @functools.partial(
-    jax.pmap, axis_name='i', static_broadcasted_argnums=[0, 3])
-def pmap_get_softmax_preds(
+    jax.pmap, axis_name='i', static_broadcasted_argnums=[0, 3],
+    in_axes=(None, None, 0, None)
+)
+def pmap_get_softmax_predictions(
     net,
     params,
     dataset,
@@ -116,11 +113,11 @@ def pmap_get_softmax_preds(
   dataset = jax.tree_map(
       lambda x: x.reshape((num_batches, batch_size, *x.shape[1:])), dataset)
 
-  def get_batch_preds(_, x):
+  def get_batch_predictions(_, x):
     y = net.apply(params, None, x)
-    preds = jax.nn.softmax(y)
-    return None, preds
+    batch_predictions = jax.nn.softmax(y)
+    return None, batch_predictions
 
-  _, preds = jax.lax.scan(get_batch_preds, None, dataset)
+  _, predictions = jax.lax.scan(get_batch_predictions, None, dataset)
 
-  return preds
+  return predictions

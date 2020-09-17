@@ -48,27 +48,31 @@ def make_optimizer(lr_schedule, momentum_decay):
                      optix.scale(-1))
 
 
-def make_hmc_update_eval_fns(net,
-                             train_set,
-                             test_set,
-                             likelihood_fn,
-                             prior_fn):
-  """Make update and eval functions for HMC training."""
+def make_hmc_update_eval_fns(
+    net,
+    train_set,
+    test_set,
+    likelihood_fn,
+    prior_fn
+):
+  """Make update and ev0al functions for HMC training."""
   n_devices = len(jax.local_devices())
 
   def log_prob_and_grad_fn(params):
-    params_p = jax.pmap(lambda _: params)(jnp.arange(n_devices))
-    log_prob, _, grad = nn_loss.pmap_get_loss_acc_grad(net, params_p,
-                                                       likelihood_fn, prior_fn,
-                                                       train_set)
-    return -log_prob[0], jax.tree_map(lambda g: -g[0], grad)
+
+    likelihood, likelihood_grad = nn_loss.pmap_get_likelihood_and_grad(
+        net, params, likelihood_fn, train_set)
+    prior, prior_grad = jax.value_and_grad(prior_fn)(params)
+    log_prob = likelihood[0] + prior
+    grad = jax.tree_multimap(lambda g_l, g_p: g_l[0] + g_p,
+                             likelihood_grad, prior_grad)
+    return log_prob, grad, likelihood[0], prior
 
   def log_prob_and_acc(params, dataset):
     params_p = jax.pmap(lambda _: params)(jnp.arange(n_devices))
-    log_prob, acc = nn_loss.pmap_get_loss_and_acc(net, params_p, likelihood_fn,
-                                                  prior_fn, dataset)
-    return -log_prob[0], acc[0]
-
+    log_prob, acc = nn_loss.pmap_get_loss_and_accuracy(
+        net, params_p, likelihood_fn, prior_fn, dataset)
+    return log_prob[0], acc[0]
 
   hmc_update = hmc.make_adaptive_hmc_update(log_prob_and_grad_fn)
 

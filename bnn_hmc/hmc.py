@@ -23,22 +23,24 @@ import jax.numpy as jnp
 def make_leapfrog(log_prob_and_grad):
   """Leapfrog method."""
 
+  # Return likelihood and prior separately in log_prob_and_grad to compute the
+  # prior densities ratio more accurately in float32 in the accept-reject step.
   def _leapfrog_body(step_size, state, momentum, state_grad):
     momentum = jax.tree_multimap(lambda m, g: m + 0.5 * step_size * g, momentum,
                                  state_grad)
     state = jax.tree_multimap(lambda s, m: s + m * step_size, state, momentum)
-    state_log_prob, state_grad = log_prob_and_grad(state)
+    state_log_prob, state_grad, log_likelihood, _ = log_prob_and_grad(state)
     momentum = jax.tree_multimap(lambda m, g: m + 0.5 * step_size * g, momentum,
                                  state_grad)
 
-    return state, momentum, state_grad, state_log_prob
+    return state, momentum, state_grad, state_log_prob, log_likelihood
 
   def leapfrog(step_size, n_leapfrog, state, momentum, state_grad):
     # Do not use `lax.fori_loop` to avoid jit-of-pmap.
     for _ in range(n_leapfrog):
-      state, momentum, state_grad, state_log_prob = \
+      state, momentum, state_grad, state_log_prob, state_likelihood = \
           _leapfrog_body(step_size, state, momentum, state_grad)
-    return state, momentum, state_grad, state_log_prob
+    return state, momentum, state_grad, state_likelihood
 
   return leapfrog
 
@@ -62,16 +64,23 @@ def make_adaptive_hmc_update(log_prob_and_grad_fn):
   def get_kinetic_energy(momentum):
     return sum([0.5 * jnp.sum(m**2) for m in jax.tree_leaves(momentum)])
 
-  def adaptive_hmc_update(state,
-                          log_prob,
-                          state_grad,
-                          key,
-                          step_size,
-                          trajectory_len,
-                          target_accept_rate=0.5,
-                          step_size_adaptation_speed=0.05,
-                          max_n_leapfrog=1000,
-                          jitter_amt=0.2):
+  def get_kinetic_energy_diff(momentum1, momentum2):
+    return sum([0.5 * jnp.sum(m1**2 - m2**2) for m1, m2 in
+                zip(jax.tree_leaves(momentum1), jax.tree_leaves(momentum2))])
+
+  def adaptive_hmc_update(
+      state,
+      log_likelihood,
+      log_prior_diff_fn,
+      state_grad,
+      key,
+      step_size,
+      trajectory_len,
+      target_accept_rate=0.5,
+      step_size_adaptation_speed=0.05,
+      max_n_leapfrog=1000,
+      jitter_amt=0.2
+  ):
 
     normal_key, uniform_key, jitter_key = jax.random.split(key, 3)
 
@@ -91,13 +100,23 @@ def make_adaptive_hmc_update(log_prob_and_grad_fn):
     momentum = jax.tree_multimap(lambda s, key: jax.random.normal(key, s.shape),
                                  state, normal_keys)
 
-    initial_energy = get_kinetic_energy(momentum) - log_prob
-    new_state, new_momentum, new_grad, new_log_prob = leapfrog(
+    new_state, new_momentum, new_grad, new_log_likelihood = leapfrog(
         jittered_step_size, n_leapfrog, state, momentum, state_grad)
-    new_energy = _nan_to_inf(get_kinetic_energy(new_momentum) - new_log_prob)
 
-    energy_diff = initial_energy - new_energy
+    log_prob = log_prob_and_grad_fn(state)[0]
+    new_log_prob = log_prob_and_grad_fn(new_state)[0]
+    initial_energy = get_kinetic_energy(momentum) - log_prob
+    new_energy = _nan_to_inf(get_kinetic_energy(new_momentum) - new_log_prob)
+    energy_diff_old = initial_energy - new_energy
+    accept_prob_old = jnp.minimum(1., jnp.exp(energy_diff_old))
+
+    energy_diff = log_likelihood - new_log_likelihood
+    energy_diff += log_prior_diff_fn(state, new_state)
+    energy_diff += get_kinetic_energy_diff(momentum, new_momentum)
+
     accept_prob = jnp.minimum(1., jnp.exp(energy_diff))
+
+    print("Accept prob", accept_prob, accept_prob_old)
     # TODO(izmailovpavel): check why the second condition is needed.
     accepted = jnp.logical_and(
         jax.random.uniform(uniform_key, log_prob.shape) < accept_prob,
