@@ -14,6 +14,6 @@ def high_precision_conv(*args, **kwargs):
 
 
 HIGH_PRECISION_RULES = {
-        lax.dot_general_p: high_precision_dot_general,
-        lax.conv_general_dilated_p: high_precision_conv
-        }
+  lax.dot_general_p: high_precision_dot_general,
+  lax.conv_general_dilated_p: high_precision_conv
+}
