@@ -30,7 +30,7 @@ from bnn_hmc import nn_loss
 
 LRSchedule = Callable[[jnp.ndarray], jnp.ndarray]
 Opt = optix.GradientTransformation
-_CKPT_FORMAT_STRING = "model_step_{}.pt"
+_CHECKPOINT_FORMAT_STRING = "model_step_{}.pt"
 
 
 def make_cosine_lr_schedule(init_lr,
@@ -52,8 +52,9 @@ def make_hmc_update_eval_fns(
     net,
     train_set,
     test_set,
-    likelihood_fn,
-    prior_fn
+    log_likelihood_fn,
+    log_prior_fn,
+    log_prior_diff_fn
 ):
   """Make update and ev0al functions for HMC training."""
   n_devices = len(jax.local_devices())
@@ -61,8 +62,8 @@ def make_hmc_update_eval_fns(
   def log_prob_and_grad_fn(params):
 
     likelihood, likelihood_grad = nn_loss.pmap_get_likelihood_and_grad(
-        net, params, likelihood_fn, train_set)
-    prior, prior_grad = jax.value_and_grad(prior_fn)(params)
+        net, params, log_likelihood_fn, train_set)
+    prior, prior_grad = jax.value_and_grad(log_prior_fn)(params)
     log_prob = likelihood[0] + prior
     grad = jax.tree_multimap(lambda g_l, g_p: g_l[0] + g_p,
                              likelihood_grad, prior_grad)
@@ -71,16 +72,19 @@ def make_hmc_update_eval_fns(
   def log_prob_and_acc(params, dataset):
     params_p = jax.pmap(lambda _: params)(jnp.arange(n_devices))
     log_prob, acc = nn_loss.pmap_get_loss_and_accuracy(
-        net, params_p, likelihood_fn, prior_fn, dataset)
+        net, params_p, log_likelihood_fn, log_prior_fn, dataset)
     return log_prob[0], acc[0]
 
-  hmc_update = hmc.make_adaptive_hmc_update(log_prob_and_grad_fn)
+  hmc_update = hmc.make_adaptive_hmc_update(
+      log_prob_and_grad_fn, log_prior_diff_fn)
 
-  def update(params, log_prob, state_grad, key, step_size, trajectory_len):
-    params, log_prob, state_grad, step_size, accept_prob = hmc_update(
-        params, log_prob, state_grad, key, step_size, trajectory_len)
+  def update(
+      params, log_likelihood, state_grad, key, step_size, trajectory_len
+  ):
+    params, log_likelihood, state_grad, step_size, accept_prob = hmc_update(
+        params, log_likelihood, state_grad, key, step_size, trajectory_len)
     key, = jax.random.split(key, 1)
-    return params, log_prob, state_grad, step_size, key, accept_prob
+    return params, log_likelihood, state_grad, step_size, key, accept_prob
 
   def evaluate(params):
     test_log_prob, test_acc = log_prob_and_acc(params, test_set)
@@ -90,50 +94,50 @@ def make_hmc_update_eval_fns(
   return update, evaluate, log_prob_and_grad_fn
 
 
-def make_ckpt_dict(params, key, step_size, trajectory_len):
-  ckpt_dict = {
+def make_checkpoint_dict(params, key, step_size, trajectory_len):
+  checkpoint_dict = {
       "params": params,
       "key": key,
       "step_size": step_size,
       "traj_len": trajectory_len
   }
-  return ckpt_dict
+  return checkpoint_dict
 
 
-def parse_ckpt_dict(ckpt_dict):
+def parse_checkpoint_dict(checkpoint_dict):
   field_names = ["params", "key", "step_size", "traj_len"]
-  return [ckpt_dict[name] for name in field_names]
+  return [checkpoint_dict[name] for name in field_names]
 
 
-def load_ckpt(path):
+def load_checkpoint(path):
     with open(path, "rb") as f:
-        ckpt_dict = pickle.load(f)
-    return parse_ckpt_dict(ckpt_dict)
+        checkpoint_dict = pickle.load(f)
+    return parse_checkpoint_dict(checkpoint_dict)
 
 
-def save_ckpt(path, ckpt_dict):
+def save_checkpoint(path, checkpoint_dict):
     with open(path, "wb") as f:
-        pickle.dump(ckpt_dict, f)
+        pickle.dump(checkpoint_dict, f)
 
 
-def _ckpt_pattern():
-    pattern_string = _CKPT_FORMAT_STRING.format("(?P<step>[0-9]+)")
+def _checkpoint_pattern():
+    pattern_string = _CHECKPOINT_FORMAT_STRING.format("(?P<step>[0-9]+)")
     return re.compile(pattern_string)
 
 
-def _match_ckpt_pattern(name):
-    pattern = _ckpt_pattern()
+def _match_checkpoint_pattern(name):
+    pattern = _checkpoint_pattern()
     return pattern.match(name)
 
 
-def name_is_ckpt(name):
-    return bool(_match_ckpt_pattern(name))
+def name_is_checkpoint(name):
+    return bool(_match_checkpoint_pattern(name))
 
 
-def parse_ckpt_name(name):
-    match = _match_ckpt_pattern(name)
+def parse_checkpoint_name(name):
+    match = _match_checkpoint_pattern(name)
     return int(match.group("step"))
 
 
-def make_ckpt_name(step):
-    return _CKPT_FORMAT_STRING.format(step)
+def make_checkpoint_name(step):
+    return _CHECKPOINT_FORMAT_STRING.format(step)

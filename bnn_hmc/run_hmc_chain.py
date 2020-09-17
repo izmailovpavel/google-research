@@ -54,8 +54,8 @@ _MODEL_FNS = {"lenet": models.lenet_fn}
 
 def train_model():
   subdirname = "seed_{}_wd_{}_stepsize_{}_trajlen_{}_niter{}".format(
-    args.seed, args.weight_decay, args.step_size, args.trajectory_len,
-    args.num_iterations)
+      args.seed, args.weight_decay, args.step_size, args.trajectory_len,
+      args.num_iterations)
   dirname = os.path.join(args.dir, subdirname)
   os.makedirs(dirname, exist_ok=True)
   with open(os.path.join(dirname, "comand.sh"), "w") as f:
@@ -66,16 +66,18 @@ def train_model():
 
   net_fn = _MODEL_FNS[args.model_name]
   net_fn = jax.experimental.callback.rewrite(
-    net_fn,
-    precision_utils.HIGH_PRECISION_RULES)
+      net_fn,
+      precision_utils.HIGH_PRECISION_RULES)
   net = hk.transform(net_fn)
   train_set, test_set, _ = data.make_ds_pmap_fullbatch(name=args.dataset_name)
-  likelihood_fn = nn_loss.xent_likelihood
-  prior_fn = nn_loss.make_gaussian_prior(weight_decay=args.weight_decay)
+  log_likelihood_fn = nn_loss.xent_log_likelihood
+  log_prior_fn, log_prior_diff = (
+      nn_loss.make_gaussian_log_prior(weight_decay=args.weight_decay))
 
   update_fn, eval_fn, log_prob_and_grad_fn = (
-    train_utils.make_hmc_update_eval_fns(net, train_set, test_set,
-                                         likelihood_fn, prior_fn))
+      train_utils.make_hmc_update_eval_fns(
+          net, train_set, test_set, log_likelihood_fn, log_prior_fn,
+          log_prior_diff))
 
   checkpoints = filter(train_utils.name_is_ckpt, os.listdir(dirname))
   checkpoints = list(checkpoints)
@@ -84,9 +86,9 @@ def train_model():
     checkpoint_iteration = map(train_utils.parse_ckpt_name, checkpoints)
     start_iteration = max(checkpoint_iteration)
     start_checkpoint_path = (
-      os.path.join(dirname, train_utils.make_ckpt_name(start_iteration)))
+        os.path.join(dirname, train_utils.make_ckpt_name(start_iteration)))
     params, key, step_size, trajectory_len = (
-      train_utils.load_ckpt(start_checkpoint_path))
+        train_utils.load_ckpt(start_checkpoint_path))
 
   else:
     key, net_init_key = jax.random.split(jax.random.PRNGKey(args.seed), 2)
@@ -97,23 +99,23 @@ def train_model():
     if args.init_checkpoint is not None:
       print("Resuming the run from the provided init_checkpoint")
       params, _, _, _ = (
-        train_utils.load_ckpt(args.init_checkpoint))
+          train_utils.load_ckpt(args.init_checkpoint))
 
     else:
       print("Starting from random initialization with provided seed")
       init_data = jax.tree_map(lambda elem: elem[0], train_set)
       params = net.init(net_init_key, init_data)
 
-  log_prob, state_grad = log_prob_and_grad_fn(params)
+  log_prob, state_grad, log_likelihood, _ = log_prob_and_grad_fn(params)
   tabulate_columns = ["iteration", "train_logprob", "train_acc",
                       "test_logprob", "test_acc", "step_size", "accept_prob",
                       "time"]
 
   for iteration in range(start_iteration, args.num_iterations):
     start_time = time.time()
-    params, log_prob, state_grad, step_size, key, accept_prob = (
-      update_fn(params, log_prob, state_grad,
-                key, step_size, trajectory_len)
+    params, log_likelihood, state_grad, step_size, key, accept_prob = (
+        update_fn(params, log_likelihood, state_grad,
+                  key, step_size, trajectory_len)
     )
     iteration_time = time.time() - start_time
 
@@ -125,7 +127,7 @@ def train_model():
       tf.summary.scalar("debug/accept_prob", accept_prob, step=iteration)
 
     tabulate_dict = OrderedDict(
-      zip(tabulate_columns, [None] * len(tabulate_columns)))
+        zip(tabulate_columns, [None] * len(tabulate_columns)))
     tabulate_dict["iteration"] = iteration
     tabulate_dict["train_logprob"] = log_prob
     tabulate_dict["step_size"] = step_size

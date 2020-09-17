@@ -45,25 +45,20 @@ def xent_log_likelihood(net, params, batch):
 
 
 def make_gaussian_log_prior(weight_decay):
-  """Returns the prior function given weight decay."""
+  """Returns the Gaussian log-density and delta given weight decay."""
   def log_prior(params):
     """Computes the Gaussian prior log-density."""
     n_params = sum([p.size for p in jax.tree_leaves(params)])
     return -(0.5 * tree_utils.tree_dot(params, params) * weight_decay +
              0.5 * n_params * jnp.log(weight_decay / (2 * math.pi)))
-
-  return log_prior
-
-
-def make_gaussian_log_prior_difference(weight_decay):
-  """Returns the function that computes the difference in prior."""
-  def prior_diff(params1, params2):
-    """Computes the delta in  Gaussian prior negative log-density."""
+  
+  def log_prior_diff(params1, params2):
+    """Computes the delta in  Gaussian prior log-density."""
     diff = sum([jnp.sum(p1**2 - p2**2) for p1, p2 in
                 zip(jax.tree_leaves(params1), jax.tree_leaves(params2))])
     return -0.5 * weight_decay * diff
 
-  return prior_diff
+  return log_prior, log_prior_diff
 
 
 @functools.partial(

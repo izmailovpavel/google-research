@@ -57,7 +57,7 @@ def _second(xy):
   return xy[1]
 
 
-def make_adaptive_hmc_update(log_prob_and_grad_fn):
+def make_adaptive_hmc_update(log_prob_and_grad_fn, log_prior_diff_fn):
   """Returns an adaptive HMC update function."""
   leapfrog = make_leapfrog(log_prob_and_grad_fn)
 
@@ -71,7 +71,6 @@ def make_adaptive_hmc_update(log_prob_and_grad_fn):
   def adaptive_hmc_update(
       state,
       log_likelihood,
-      log_prior_diff_fn,
       state_grad,
       key,
       step_size,
@@ -130,7 +129,7 @@ def make_adaptive_hmc_update(log_prob_and_grad_fn):
             (jnp.mean(accept_prob) - target_accept_rate)))
 
     state = jax.lax.cond(accepted, _first, _second, (new_state, state))
-    log_prob = jnp.where(accepted, new_log_prob, log_prob)
+    log_likelihood = jnp.where(accepted, new_log_likelihood, log_likelihood)
     state_grad = jax.lax.cond(accepted, _first, _second, (new_grad, state_grad))
-    return state, log_prob, state_grad, step_size, accept_prob
+    return state, log_likelihood, state_grad, step_size, accept_prob
   return adaptive_hmc_update
