@@ -41,6 +41,18 @@ config.FLAGS.jax_backend_target = "grpc://{}:8470".format(args.tpu_ip)
 _MODEL_FNS = {"lenet": models.lenet_fn}
 
 
+
+def make_gaussian_prior_difference_numpy(weight_decay):
+  """Returns the function that computes the difference in prior."""
+  def prior_diff(params1, params2):
+    """Computes the delta in  Gaussian prior negative log-density."""
+    diff = sum([onp.sum(onp.array(p1)**2 - onp.array(p2)**2) for p1, p2 in
+                zip(jax.tree_leaves(params1), jax.tree_leaves(params2))])
+    return (0.5 * weight_decay * diff) 
+
+  return prior_diff
+
+
 def test_precision():
 
     net_fn = _MODEL_FNS[args.model_name]
@@ -53,36 +65,37 @@ def test_precision():
     train_set, test_set, _ = data.make_ds_pmap_fullbatch(name=args.dataset_name)
     likelihood_fn = nn_loss.xent_likelihood
     prior_fn = nn_loss.make_gaussian_prior(weight_decay=args.weight_decay)
-    prior_fn_highprec = jax.experimental.callback.rewrite(
-  			  prior_fn,
-  			  precision_utils.HIGH_PRECISION_RULES)
+    prior_diff_fn = nn_loss.make_gaussian_prior_difference(weight_decay=args.weight_decay)
+    prior_diff_np_fn = make_gaussian_prior_difference_numpy(weight_decay=args.weight_decay)
 
     #update_fn, eval_fn, log_prob_and_grad_fn = (
     #    train_utils.make_hmc_update_eval_fns(net, train_set, test_set,
     #                                         likelihood_fn, prior_fn))
 
-    key, net_init_key = jax.random.split(jax.random.PRNGKey(args.seed), 2)
+    key, net_init_key, net_init_key2 = jax.random.split(jax.random.PRNGKey(args.seed), 3)
     init_data = jax.tree_map(lambda elem: elem[0], train_set)
     params = net.init(net_init_key, init_data)
+    params2 = net.init(net_init_key2, init_data)
     
     #log_prob, state_grad = log_prob_and_grad_fn(params)
     tabulate_columns = ["iteration", "train_logprob", "train_acc", "test_logprob",
                         "test_acc", "step_size", "accept_prob", "time"]
 
     n_devices = len(jax.local_devices())
-    start = time.time()
     params_p = jax.pmap(lambda _: params)(jnp.arange(n_devices))
-    print(time.time() - start)
-    start = time.time()
-    params_p = jax.pmap(lambda _: params)(jnp.arange(n_devices))
-    print(time.time() - start)
+    params2_p = jax.pmap(lambda _: params2)(jnp.arange(n_devices))
+
     preds = nn_loss.pmap_get_softmax_preds(net, params_p, test_set, 1)
     preds_highprec = nn_loss.pmap_get_softmax_preds(net_highprec, params_p, test_set, 1)
     print("Distance between predictions:", jnp.sum((preds - preds_highprec)**2))
 
     prior_val = prior_fn(params_p)
-    prior_highprec_val = prior_fn_highprec(params_p)
-    print("Prior", prior_val, prior_highprec_val)
+    prior_val2 = prior_fn(params2_p)
+    prior_diff = prior_val - prior_val2
+    prior_diff_highprec = prior_diff_fn(params_p, params2_p)
+    prior_diff_np = prior_diff_np_fn(params_p, params2_p)
+    print("Prior diff", prior_diff, prior_diff_highprec, prior_diff_np)
+    print(prior_diff_np.dtype)
 
 
 

@@ -55,15 +55,15 @@ def make_gaussian_prior(weight_decay):
   return prior
 
 
-def make_gaussian_prior_highprecision(weight_decay):
-  """Returns the prior function given weight decay."""
-  def prior(params):
-    """Computes the Gaussian prior negative log-density."""
-    n_params = sum([p.size for p in jax.tree_leaves(params)])
-    return (0.5 * tree_utils.tree_dot(params, params) * weight_decay +
-            0.5 * n_params * jnp.log(weight_decay / (2 * math.pi)))
+def make_gaussian_prior_difference(weight_decay):
+  """Returns the function that computes the difference in prior."""
+  def prior_diff(params1, params2):
+    """Computes the delta in  Gaussian prior negative log-density."""
+    diff = sum([jnp.sum(p1**2 - p2**2) for p1, p2 in
+                zip(jax.tree_leaves(params1), jax.tree_leaves(params2))])
+    return (0.5 * weight_decay * diff) 
 
-  return prior
+  return prior_diff
 
 
 @functools.partial(

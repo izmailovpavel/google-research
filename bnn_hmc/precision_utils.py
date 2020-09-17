@@ -6,10 +6,14 @@ def high_precision_dot_general(*args, **kwargs):
   return lax.dot_general(*args, precision=lax.Precision.HIGH, **kwargs)
 
 
-def high_precision_conv_general_dilated(*args, **kwargs):
+def high_precision_conv(*args, **kwargs):
   kwargs.pop('precision')
+  kwargs.pop('lhs_shape')
+  kwargs.pop('rhs_shape')
   return lax.conv_general_dilated(*args, precision=lax.Precision.HIGH, **kwargs)
 
 
-HIGH_PRECISION_RULES = {lax.dot_general_p: high_precision_dot_general,
-	           lax.conv_general_dilated: high_precision_conv_general_dilated}
+HIGH_PRECISION_RULES = {
+        lax.dot_general_p: high_precision_dot_general,
+        lax.conv_general_dilated_p: high_precision_conv
+        }
