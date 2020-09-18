@@ -107,7 +107,7 @@ def train_model():
       params = net.init(net_init_key, init_data)
 
   log_prob, state_grad, log_likelihood, _ = log_prob_and_grad_fn(params)
-  tabulate_columns = ["iteration", "train_logprob", "train_acc",
+  tabulate_columns = ["iteration",  "train_ll", "train_logprob", "train_acc",
                       "test_logprob", "test_acc", "step_size", "accept_prob",
                       "time"]
 
@@ -120,7 +120,7 @@ def train_model():
     iteration_time = time.time() - start_time
 
     with tf_writer.as_default():
-      tf.summary.scalar("train/log_prob", log_prob, step=iteration)
+      tf.summary.scalar("train/log_likelihood", log_likelihood, step=iteration)
       tf.summary.scalar("hypers/step_size", step_size, step=iteration)
       tf.summary.scalar("hypers/trajectory_len", trajectory_len,
                         step=iteration)
@@ -128,8 +128,8 @@ def train_model():
 
     tabulate_dict = OrderedDict(
         zip(tabulate_columns, [None] * len(tabulate_columns)))
+    tabulate_dict["train_ll"] = log_likelihood
     tabulate_dict["iteration"] = iteration
-    tabulate_dict["train_logprob"] = log_prob
     tabulate_dict["step_size"] = step_size
     tabulate_dict["accept_prob"] = accept_prob
     tabulate_dict["time"] = iteration_time
@@ -141,13 +141,16 @@ def train_model():
     train_utils.save_checkpoint(checkpoint_path, checkpoint_dict)
 
     if iteration % args.eval_freq == 0:
-      test_log_prob, test_acc, _, train_acc = eval_fn(params)
+      test_log_prob, test_acc, train_log_prob, train_acc = eval_fn(params)
       with tf_writer.as_default():
+        tf.summary.scalar("train/log_prob", train_log_prob,
+                          step=iteration)
         tf.summary.scalar("test/log_prob", test_log_prob,
                           step=iteration)
         tf.summary.scalar("train/accuracy", train_acc, step=iteration)
         tf.summary.scalar("test/accuracy", test_acc, step=iteration)
 
+      tabulate_dict["train_logprob"] = log_prob
       tabulate_dict["test_logprob"] = test_log_prob
       tabulate_dict["train_acc"] = train_acc
       tabulate_dict["test_acc"] = test_acc
