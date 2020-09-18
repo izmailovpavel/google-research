@@ -61,7 +61,7 @@ def make_hmc_update_eval_fns(
 
   def log_prob_and_grad_fn(params):
 
-    likelihood, likelihood_grad = nn_loss.pmap_get_likelihood_and_grad(
+    likelihood, likelihood_grad = nn_loss.pmap_get_log_likelihood_and_grad(
         net, params, log_likelihood_fn, train_set)
     prior, prior_grad = jax.value_and_grad(log_prior_fn)(params)
     log_prob = likelihood[0] + prior
@@ -70,9 +70,8 @@ def make_hmc_update_eval_fns(
     return log_prob, grad, likelihood[0], prior
 
   def log_prob_and_acc(params, dataset):
-    params_p = jax.pmap(lambda _: params)(jnp.arange(n_devices))
-    log_prob, acc = nn_loss.pmap_get_loss_and_accuracy(
-        net, params_p, log_likelihood_fn, log_prior_fn, dataset)
+    log_prob, acc = nn_loss.pmap_get_log_prob_and_accuracy(
+        net, params, log_likelihood_fn, log_prior_fn, dataset)
     return log_prob[0], acc[0]
 
   hmc_update = hmc.make_adaptive_hmc_update(

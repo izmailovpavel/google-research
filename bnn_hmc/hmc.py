@@ -57,16 +57,29 @@ def _second(xy):
   return xy[1]
 
 
+def get_kinetic_energy_diff(momentum1, momentum2):
+  return sum([0.5 * jnp.sum(m1**2 - m2**2) for m1, m2 in
+              zip(jax.tree_leaves(momentum1), jax.tree_leaves(momentum2))])
+
+def make_accept_prob(log_prior_diff_fn):
+  def get_accept_prob(
+      log_likelihood1, state1, momentum1, log_likelihood2, state2, momentum2
+    ):
+    energy_diff = get_kinetic_energy_diff(momentum1, momentum2)
+    energy_diff -= log_likelihood1 - log_likelihood2
+    energy_diff -= log_prior_diff_fn(state1, new_state2)
+    accept_prob = jnp.minimum(1., jnp.exp(energy_diff))
+    return accept_prob
+
+
 def make_adaptive_hmc_update(log_prob_and_grad_fn, log_prior_diff_fn):
   """Returns an adaptive HMC update function."""
   leapfrog = make_leapfrog(log_prob_and_grad_fn)
+  get_accept_prob = make_accept_prob(log_prior_diff_fn)
 
   def get_kinetic_energy(momentum):
     return sum([0.5 * jnp.sum(m**2) for m in jax.tree_leaves(momentum)])
 
-  def get_kinetic_energy_diff(momentum1, momentum2):
-    return sum([0.5 * jnp.sum(m1**2 - m2**2) for m1, m2 in
-                zip(jax.tree_leaves(momentum1), jax.tree_leaves(momentum2))])
 
   def adaptive_hmc_update(
       state,
@@ -102,20 +115,25 @@ def make_adaptive_hmc_update(log_prob_and_grad_fn, log_prior_diff_fn):
     new_state, new_momentum, new_grad, new_log_likelihood = leapfrog(
         jittered_step_size, n_leapfrog, state, momentum, state_grad)
 
-    log_prob = log_prob_and_grad_fn(state)[0]
-    new_log_prob = log_prob_and_grad_fn(new_state)[0]
-    initial_energy = get_kinetic_energy(momentum) - log_prob
-    new_energy = _nan_to_inf(get_kinetic_energy(new_momentum) - new_log_prob)
-    energy_diff_old = initial_energy - new_energy
-    accept_prob_old = jnp.minimum(1., jnp.exp(energy_diff_old))
+    #log_prob = log_prob_and_grad_fn(state)[0]
+    #new_log_prob = log_prob_and_grad_fn(new_state)[0]
+    #initial_energy = get_kinetic_energy(momentum) - log_prob
+    #new_energy = _nan_to_inf(get_kinetic_energy(new_momentum) - new_log_prob)
+    #energy_diff_old = initial_energy - new_energy
+    #accept_prob_old = jnp.minimum(1., jnp.exp(energy_diff_old))
 
-    energy_diff = log_likelihood - new_log_likelihood
-    energy_diff += log_prior_diff_fn(state, new_state)
-    energy_diff += get_kinetic_energy_diff(momentum, new_momentum)
+    #energy_diff = get_kinetic_energy_diff(momentum, new_momentum)
+    #energy_diff -= log_likelihood - new_log_likelihood
+    #energy_diff -= log_prior_diff_fn(state, new_state)
 
-    accept_prob = jnp.minimum(1., jnp.exp(energy_diff))
+    #accept_prob = jnp.minimum(1., jnp.exp(energy_diff))
 
-    print("Accept prob", accept_prob, accept_prob_old)
+    #print("Accept prob", accept_prob, accept_prob_old)
+    #print("Energy diff", energy_diff, energy_diff_old)
+    #print("Kinetic energy diff", get_kinetic_energy_diff(momentum, new_momentum), get_kinetic_energy(momentum) - get_kinetic_energy(new_momentum))
+    #print("Prior diff", log_prior_diff_fn(state, new_state))
+    #print("Likelihood diff", log_likelihood - new_log_likelihood)
+    #print("Logprob diff", log_prob - new_log_prob)
     # TODO(izmailovpavel): check why the second condition is needed.
     accepted = jnp.logical_and(
         jax.random.uniform(uniform_key, log_prob.shape) < accept_prob,

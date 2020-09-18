@@ -79,16 +79,16 @@ def train_model():
           net, train_set, test_set, log_likelihood_fn, log_prior_fn,
           log_prior_diff))
 
-  checkpoints = filter(train_utils.name_is_ckpt, os.listdir(dirname))
+  checkpoints = filter(train_utils.name_is_checkpoint, os.listdir(dirname))
   checkpoints = list(checkpoints)
   if checkpoints:
     print("Continuing the run from the last saved checkpoint")
-    checkpoint_iteration = map(train_utils.parse_ckpt_name, checkpoints)
+    checkpoint_iteration = map(train_utils.parse_checkpoint_name, checkpoints)
     start_iteration = max(checkpoint_iteration)
     start_checkpoint_path = (
-        os.path.join(dirname, train_utils.make_ckpt_name(start_iteration)))
+        os.path.join(dirname, train_utils.make_checkpoint_name(start_iteration)))
     params, key, step_size, trajectory_len = (
-        train_utils.load_ckpt(start_checkpoint_path))
+        train_utils.load_checkpoint(start_checkpoint_path))
 
   else:
     key, net_init_key = jax.random.split(jax.random.PRNGKey(args.seed), 2)
@@ -99,7 +99,7 @@ def train_model():
     if args.init_checkpoint is not None:
       print("Resuming the run from the provided init_checkpoint")
       params, _, _, _ = (
-          train_utils.load_ckpt(args.init_checkpoint))
+          train_utils.load_checkpoint(args.init_checkpoint))
 
     else:
       print("Starting from random initialization with provided seed")
@@ -134,11 +134,11 @@ def train_model():
     tabulate_dict["accept_prob"] = accept_prob
     tabulate_dict["time"] = iteration_time
 
-    checkpoint_name = train_utils.make_ckpt_name(iteration)
+    checkpoint_name = train_utils.make_checkpoint_name(iteration)
     checkpoint_path = os.path.join(dirname, checkpoint_name)
-    checkpoint_dict = train_utils.make_ckpt_dict(params, key, step_size,
+    checkpoint_dict = train_utils.make_checkpoint_dict(params, key, step_size,
                                                  trajectory_len)
-    train_utils.save_ckpt(checkpoint_path, checkpoint_dict)
+    train_utils.save_checkpoint(checkpoint_path, checkpoint_dict)
 
     if iteration % args.eval_freq == 0:
       test_log_prob, test_acc, _, train_acc = eval_fn(params)
