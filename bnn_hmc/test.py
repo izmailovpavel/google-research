@@ -96,9 +96,11 @@ class TestHMC(unittest.TestCase):
       log_prob, grad, likelihood, prior = log_prob_and_grad_fn(params)
       self.assertEqual(log_prob, likelihood + prior)
 
-      n_split = train_set.shape[1]
-      log_prob_and_grad_first_half_fn = get_log_prob(train_set[:, :n_split])
-      log_prob_and_grad_second_half_fn = get_log_prob(train_set[:, n_split:])
+      n_split = train_set[0].shape[1]
+      first_half = jax.tree_map(lambda x: x[:, :n_split], train_set)
+      second_half = jax.tree_map(lambda x: x[:, n_split:], train_set)
+      log_prob_and_grad_first_half_fn = get_log_prob(first_half)
+      log_prob_and_grad_second_half_fn = get_log_prob(second_half)
       log_prob_fh, grad_fh, likelihood_fh, prior_fh = (
           log_prob_and_grad_first_half_fn(params))
 
@@ -116,6 +118,10 @@ class TestHMC(unittest.TestCase):
     net, params, train_set, test_set, init_data, init_key = self._prepare()
     init_key, = jax.random.split(init_key, 1)
     params2 = net.init(init_key, init_data)
+
+    # Rescale parameters so accept_prob is not 0 or 1.
+    params, params2 = jax.tree_map(lambda p: p * 1e-2, [params, params2])
+
     log_likelihood_fn = nn_loss.xent_log_likelihood
     log_prior_fn, log_prior_diff = (
         nn_loss.make_gaussian_log_prior(weight_decay=weight_decay))
@@ -130,13 +136,13 @@ class TestHMC(unittest.TestCase):
     key, key2 = jax.random.split(init_key, 2)
     momentum = hmc.sample_momentum(params, key)
     momentum2 = hmc.sample_momentum(params2, key2)
+    momentum, momentum2 = jax.tree_map(lambda p: p * 1e-2, [momentum, momentum2])
 
-    get_accept_prob = make_accept_prob(log_prior_diff)
+    get_accept_prob = hmc.make_accept_prob(log_prior_diff)
     accept_prob = get_accept_prob(
         log_likelihood, params, momentum, log_likelihood2, params2, momentum2)
     accept_prob_reverse = get_accept_prob(
       log_likelihood2, params2, momentum2, log_likelihood, params, momentum)
-    print(accept_prob, accept_prob_reverse)
     
     def prior_onp_fn(params):
       norm_sq = sum([onp.sum(onp.array(p, dtype=onp.float128)**2)
@@ -156,11 +162,18 @@ class TestHMC(unittest.TestCase):
     energy_diff = energy - energy2
     onp_accept_prob = onp.minimum(1., onp.exp(energy_diff))
     onp_accept_prob_reverse = onp.minimum(1., onp.exp(-energy_diff))
-    print(onp_accept_prob, onp_accept_prob_reverse)
-    
-    self.assertSmaller(jnp.abs(onp_accept_prob - accept_prob), 1e-4)
-    self.assertSmaller(
-      jnp.abs(onp_accept_prob_reverse - accept_prob_reverse), 1e-4)
+
+    self.assertLess(
+      onp.abs(onp_accept_prob - 
+              onp.array(accept_prob, dtype=onp.float128)), 1e-4)
+    self.assertLess(
+      onp.abs(onp_accept_prob_reverse - 
+              onp.array(accept_prob_reverse, dtype=onp.float128)), 1e-4)
+
+    accept_prob_not_1_or_0 = (
+        ((accept_prob > 1e-4) and (accept_prob < 1. - 1e-4)) or
+        ((accept_prob_reverse > 1e-4) and (accept_prob_reverse < 1. - 1e-4)))
+    assert accept_prob_not_1_or_0
 
 
 if __name__ == '__main__':
