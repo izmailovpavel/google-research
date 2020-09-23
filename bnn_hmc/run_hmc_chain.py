@@ -125,7 +125,7 @@ def train_model():
     
     # do a linear ramp-down of the step-size in the burn-in phase
     if iteration < args.num_burn_in_iterations:
-      alpha = iteration / args.num_burn_in_iterations
+      alpha = iteration / (args.num_burn_in_iterations - 1)
       initial_step_size = args.step_size
       final_step_size = args.burn_in_step_size_factor * args.step_size
       step_size = final_step_size * alpha + initial_step_size * (1 - alpha)

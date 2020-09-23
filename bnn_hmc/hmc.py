@@ -18,6 +18,7 @@
 
 import jax
 import jax.numpy as jnp
+import tqdm
 
 
 def make_leapfrog(log_prob_and_grad):
@@ -37,7 +38,7 @@ def make_leapfrog(log_prob_and_grad):
 
   def leapfrog(step_size, n_leapfrog, state, momentum, state_grad):
     # Do not use `lax.fori_loop` to avoid jit-of-pmap.
-    for _ in range(n_leapfrog):
+    for _ in tqdm.tqdm(range(n_leapfrog)):
       state, momentum, state_grad, state_log_prob, state_likelihood = \
           _leapfrog_body(step_size, state, momentum, state_grad)
     return state, momentum, state_grad, state_likelihood
