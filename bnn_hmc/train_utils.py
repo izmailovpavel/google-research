@@ -54,10 +54,11 @@ def make_hmc_update_eval_fns(
     test_set,
     log_likelihood_fn,
     log_prior_fn,
-    log_prior_diff_fn
+    log_prior_diff_fn,
+    target_accept_rate,
+    step_size_adaptation_speed
 ):
   """Make update and ev0al functions for HMC training."""
-  n_devices = len(jax.local_devices())
 
   def log_prob_and_grad_fn(params):
 
@@ -78,10 +79,13 @@ def make_hmc_update_eval_fns(
       log_prob_and_grad_fn, log_prior_diff_fn)
 
   def update(
-      params, log_likelihood, state_grad, key, step_size, trajectory_len
-  ):
+      params, log_likelihood, state_grad, key, step_size, trajectory_len,
+      do_mh_correction):
     params, log_likelihood, state_grad, step_size, accept_prob = hmc_update(
-        params, log_likelihood, state_grad, key, step_size, trajectory_len)
+        params, log_likelihood, state_grad, key, step_size, trajectory_len,
+        target_accept_rate=target_accept_rate,
+        step_size_adaptation_speed=step_size_adaptation_speed,
+        do_mh_correction=do_mh_correction)
     key, = jax.random.split(key, 1)
     return params, log_likelihood, state_grad, step_size, key, accept_prob
 

@@ -25,10 +25,19 @@ parser.add_argument("--tpu_ip", type=str, default="10.0.0.2",
 parser.add_argument("--seed", type=int, default=0, help="Random seed")
 parser.add_argument("--step_size", type=float, default=1.e-4,
                     help="HMC step size")
+parser.add_argument("--burn_in_step_size_factor", type=float, default=1.,
+                    help="Multiplicative factor by which step size is re-scaled"
+                         "during burn-in phase")
+parser.add_argument("--step_size_adaptation_speed", type=float, default=0.,
+                    help="Step size adaptation speed")
+parser.add_argument("--target_accept_rate", type=float, default=0.8,
+                    help="Target accept rate in the M-H correction step")
 parser.add_argument("--trajectory_len", type=float, default=1.e-3,
                     help="HMC trajectory length")
 parser.add_argument("--num_iterations", type=int, default=1000,
                     help="Total number of HMC iterations")
+parser.add_argument("--num_burn_in_iterations", type=int, default=0,
+                    help="Number of burn-in iterations")
 parser.add_argument("--weight_decay", type=float, default=15.,
                     help="Wight decay, equivalent to setting prior std")
 parser.add_argument("--init_checkpoint", type=str, default=None,
@@ -77,7 +86,8 @@ def train_model():
   update_fn, eval_fn, log_prob_and_grad_fn = (
       train_utils.make_hmc_update_eval_fns(
           net, train_set, test_set, log_likelihood_fn, log_prior_fn,
-          log_prior_diff))
+          log_prior_diff, args.target_accept_rate,
+          args.step_size_adaptation_speed))
 
   checkpoints = filter(train_utils.name_is_checkpoint, os.listdir(dirname))
   checkpoints = list(checkpoints)
@@ -112,10 +122,19 @@ def train_model():
                       "time"]
 
   for iteration in range(start_iteration, args.num_iterations):
+    
+    # do a linear ramp-down of the step-size in the burn-in phase
+    if iteration < args.num_burn_in_iterations:
+      alpha = iteration / args.num_burn_in_iterations
+      initial_step_size = args.step_size
+      final_step_size = args.burn_in_step_size_factor * args.step_size
+      step_size = final_step_size * alpha + initial_step_size * (1 - alpha)
+      
     start_time = time.time()
+    do_mh_correction = (iteration >= args.num_burn_in_iterations)
     params, log_likelihood, state_grad, step_size, key, accept_prob = (
         update_fn(params, log_likelihood, state_grad,
-                  key, step_size, trajectory_len)
+                  key, step_size, trajectory_len, do_mh_correction)
     )
     iteration_time = time.time() - start_time
 
@@ -125,6 +144,8 @@ def train_model():
       tf.summary.scalar("hypers/trajectory_len", trajectory_len,
                         step=iteration)
       tf.summary.scalar("debug/accept_prob", accept_prob, step=iteration)
+      tf.summary.scalar("debug/do_mh_correction", float(do_mh_correction),
+                        step=iteration)
 
     tabulate_dict = OrderedDict(
         zip(tabulate_columns, [None] * len(tabulate_columns)))

@@ -99,7 +99,8 @@ def make_adaptive_hmc_update(log_prob_and_grad_fn, log_prior_diff_fn):
       target_accept_rate=0.8,
       step_size_adaptation_speed=0.05,
       max_n_leapfrog=15000,
-      jitter_amt=0.2
+      jitter_amt=0.2,
+      do_mh_correction=True
   ):
 
     normal_key, uniform_key, jitter_key = jax.random.split(key, 3)
@@ -117,26 +118,6 @@ def make_adaptive_hmc_update(log_prob_and_grad_fn, log_prior_diff_fn):
 
     new_state, new_momentum, new_grad, new_log_likelihood = leapfrog(
         jittered_step_size, n_leapfrog, state, momentum, state_grad)
-
-    #log_prob = log_prob_and_grad_fn(state)[0]
-    #new_log_prob = log_prob_and_grad_fn(new_state)[0]
-    #initial_energy = get_kinetic_energy(momentum) - log_prob
-    #new_energy = _nan_to_inf(get_kinetic_energy(new_momentum) - new_log_prob)
-    #energy_diff_old = initial_energy - new_energy
-    #accept_prob_old = jnp.minimum(1., jnp.exp(energy_diff_old))
-
-    #energy_diff = get_kinetic_energy_diff(momentum, new_momentum)
-    #energy_diff -= log_likelihood - new_log_likelihood
-    #energy_diff -= log_prior_diff_fn(state, new_state)
-
-    #accept_prob = jnp.minimum(1., jnp.exp(energy_diff))
-
-    #print("Accept prob", accept_prob, accept_prob_old)
-    #print("Energy diff", energy_diff, energy_diff_old)
-    #print("Kinetic energy diff", get_kinetic_energy_diff(momentum, new_momentum), get_kinetic_energy(momentum) - get_kinetic_energy(new_momentum))
-    #print("Prior diff", log_prior_diff_fn(state, new_state))
-    #print("Likelihood diff", log_likelihood - new_log_likelihood)
-    #print("Logprob diff", log_prob - new_log_prob)
     accept_prob = get_accept_prob(
         log_likelihood, state, momentum,
         new_log_likelihood, new_state, new_momentum)
@@ -149,9 +130,14 @@ def make_adaptive_hmc_update(log_prob_and_grad_fn, log_prior_diff_fn):
                            step_size_adaptation_speed <= 0), 0.,
             step_size_adaptation_speed *
             (jnp.mean(accept_prob) - target_accept_rate)))
-
-    state = jax.lax.cond(accepted, _first, _second, (new_state, state))
-    log_likelihood = jnp.where(accepted, new_log_likelihood, log_likelihood)
-    state_grad = jax.lax.cond(accepted, _first, _second, (new_grad, state_grad))
+    
+    if do_mh_correction:
+      state = jax.lax.cond(accepted, _first, _second, (new_state, state))
+      log_likelihood = jnp.where(accepted, new_log_likelihood, log_likelihood)
+      state_grad = jax.lax.cond(
+          accepted, _first, _second, (new_grad, state_grad))
+    else:
+      state, log_likelihood, state_grad = (
+          new_state, new_log_likelihood, new_grad)
     return state, log_likelihood, state_grad, step_size, accept_prob
   return adaptive_hmc_update
