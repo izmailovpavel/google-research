@@ -24,33 +24,37 @@ import jax.numpy as jnp
 Batch = Tuple[jnp.ndarray, jnp.ndarray]
 
 
-def lenet_fn(batch):
-  """Network inspired by LeNet-5."""
-  x, _ = batch
-  x = x.astype(jnp.float32)
+def make_lenet_fn(num_classes):
+  def lenet_fn(batch, is_training):
+    """Network inspired by LeNet-5."""
+    x, _ = batch
+    x = x.astype(jnp.float32)
+  
+    cnn = hk.Sequential([
+        hk.Conv2D(output_channels=32, kernel_shape=5, padding="SAME"),
+        jax.nn.relu,
+        hk.MaxPool(window_shape=3, strides=2, padding="VALID"),
+        hk.Conv2D(output_channels=64, kernel_shape=5, padding="SAME"),
+        jax.nn.relu,
+        hk.MaxPool(window_shape=3, strides=2, padding="VALID"),
+        hk.Conv2D(output_channels=128, kernel_shape=5, padding="SAME"),
+        hk.MaxPool(window_shape=3, strides=2, padding="VALID"),
+        hk.Flatten(),
+        hk.Linear(1000),
+        jax.nn.relu,
+        hk.Linear(1000),
+        jax.nn.relu,
+        hk.Linear(num_classes),
+    ])
+    return cnn(x)
+  return lenet_fn
 
-  cnn = hk.Sequential([
-      hk.Conv2D(output_channels=32, kernel_shape=5, padding="SAME"),
-      jax.nn.relu,
-      hk.MaxPool(window_shape=3, strides=2, padding="VALID"),
-      hk.Conv2D(output_channels=64, kernel_shape=5, padding="SAME"),
-      jax.nn.relu,
-      hk.MaxPool(window_shape=3, strides=2, padding="VALID"),
-      hk.Conv2D(output_channels=128, kernel_shape=5, padding="SAME"),
-      hk.MaxPool(window_shape=3, strides=2, padding="VALID"),
-      hk.Flatten(),
-      hk.Linear(1000),
-      jax.nn.relu,
-      hk.Linear(1000),
-      jax.nn.relu,
-      hk.Linear(10),
-  ])
-  return cnn(x)
 
-
-def resnet(batch, is_training):
-  """ResNet-18."""
-  x, _ = batch
-  x = x.astype(jnp.float32)
-  net = hk.nets.ResNet18(10, resnet_v2=True)
-  return net(x, is_training=is_training)
+def make_resnet_18_fn(num_classes):
+  def resnet18_fn(batch, is_training):
+    """ResNet-18."""
+    x, _ = batch
+    x = x.astype(jnp.float32)
+    net = hk.nets.ResNet18(num_classes, resnet_v2=True)
+    return net(x, is_training=is_training)
+  return resnet18_fn

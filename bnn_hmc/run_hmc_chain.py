@@ -58,7 +58,8 @@ args = parser.parse_args()
 config.FLAGS.jax_xla_backend = "tpu_driver"
 config.FLAGS.jax_backend_target = "grpc://{}:8470".format(args.tpu_ip)
 
-_MODEL_FNS = {"lenet": models.lenet_fn}
+_MODEL_FNS = {"lenet": models.make_lenet_fn,
+              "resnet18": models.make_resnet_18_fn}
 
 
 def train_model():
@@ -72,13 +73,14 @@ def train_model():
     f.write("\n")
 
   tf_writer = tf.summary.create_file_writer(dirname)
-
-  net_fn = _MODEL_FNS[args.model_name]
+  
+  train_set, test_set, num_classes = data.make_ds_pmap_fullbatch(name=args.dataset_name)
+  net_fn = _MODEL_FNS[args.model_name](num_classes)
   net_fn = jax.experimental.callback.rewrite(
       net_fn,
       precision_utils.HIGH_PRECISION_RULES)
-  net = hk.transform(net_fn)
-  train_set, test_set, _ = data.make_ds_pmap_fullbatch(name=args.dataset_name)
+  net = hk.transform_with_state(net_fn)
+  
   log_likelihood_fn = nn_loss.xent_log_likelihood
   log_prior_fn, log_prior_diff = (
       nn_loss.make_gaussian_log_prior(weight_decay=args.weight_decay))
@@ -89,6 +91,8 @@ def train_model():
           log_prior_diff, args.target_accept_rate,
           args.step_size_adaptation_speed))
 
+  trajectory_len = args.trajectory_len
+  
   checkpoints = filter(train_utils.name_is_checkpoint, os.listdir(dirname))
   checkpoints = list(checkpoints)
   if checkpoints:
@@ -97,24 +101,23 @@ def train_model():
     start_iteration = max(checkpoint_iteration)
     start_checkpoint_path = (
         os.path.join(dirname, train_utils.make_checkpoint_name(start_iteration)))
-    params, key, step_size, trajectory_len = (
+    params, net_state, key, step_size = (
         train_utils.load_checkpoint(start_checkpoint_path))
 
   else:
     key, net_init_key = jax.random.split(jax.random.PRNGKey(args.seed), 2)
     step_size = args.step_size
-    trajectory_len = args.trajectory_len
     start_iteration = 0
 
     if args.init_checkpoint is not None:
       print("Resuming the run from the provided init_checkpoint")
-      params, _, _, _ = (
+      params, net_state, _, _ = (
           train_utils.load_checkpoint(args.init_checkpoint))
 
     else:
       print("Starting from random initialization with provided seed")
       init_data = jax.tree_map(lambda elem: elem[0], train_set)
-      params = net.init(net_init_key, init_data)
+      params, net_state = net.init(net_init_key, init_data)
 
   log_prob, state_grad, log_likelihood, _ = log_prob_and_grad_fn(params)
   tabulate_columns = ["iteration",  "train_ll", "train_logprob", "train_acc",
@@ -132,7 +135,8 @@ def train_model():
       
     start_time = time.time()
     do_mh_correction = (iteration >= args.num_burn_in_iterations)
-    params, log_likelihood, state_grad, step_size, key, accept_prob = (
+    (params, net_state, log_likelihood, state_grad, step_size, key,
+     accept_prob) = (
         update_fn(params, log_likelihood, state_grad,
                   key, step_size, trajectory_len, do_mh_correction)
     )
@@ -146,6 +150,8 @@ def train_model():
       tf.summary.scalar("debug/accept_prob", accept_prob, step=iteration)
       tf.summary.scalar("debug/do_mh_correction", float(do_mh_correction),
                         step=iteration)
+      tf.summary.scalar("debug/iteration_time", iteration_time,
+                        step=iteration)
 
     tabulate_dict = OrderedDict(
         zip(tabulate_columns, [None] * len(tabulate_columns)))
@@ -157,8 +163,8 @@ def train_model():
 
     checkpoint_name = train_utils.make_checkpoint_name(iteration)
     checkpoint_path = os.path.join(dirname, checkpoint_name)
-    checkpoint_dict = train_utils.make_checkpoint_dict(params, key, step_size,
-                                                 trajectory_len)
+    checkpoint_dict = train_utils.make_checkpoint_dict(
+        params, net_state, key, step_size)
     train_utils.save_checkpoint(checkpoint_path, checkpoint_dict)
 
     if iteration % args.eval_freq == 0:

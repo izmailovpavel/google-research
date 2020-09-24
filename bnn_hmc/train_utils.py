@@ -60,34 +60,38 @@ def make_hmc_update_eval_fns(
 ):
   """Make update and ev0al functions for HMC training."""
 
-  def log_prob_and_grad_fn(params):
+  def log_prob_and_grad_fn(params, net_state):
 
-    likelihood, likelihood_grad = nn_loss.pmap_get_log_likelihood_and_grad(
-        net, params, log_likelihood_fn, train_set)
+    likelihood, likelihood_grad, net_state = (
+        nn_loss.pmap_get_log_likelihood_and_grad(
+            net, params, net_state, log_likelihood_fn, train_set))
     prior, prior_grad = jax.value_and_grad(log_prior_fn)(params)
     log_prob = likelihood[0] + prior
     grad = jax.tree_multimap(lambda g_l, g_p: g_l[0] + g_p,
                              likelihood_grad, prior_grad)
-    return log_prob, grad, likelihood[0], prior
+    return log_prob, grad, likelihood[0], prior, net_state
 
-  def log_prob_and_acc(params, dataset):
-    log_prob, acc = nn_loss.pmap_get_log_prob_and_accuracy(
-        net, params, log_likelihood_fn, log_prior_fn, dataset)
+  def log_prob_and_acc(params, net_state, dataset):
+    log_prob, acc, _ = nn_loss.pmap_get_log_prob_and_accuracy(
+        net, params, net_state, log_likelihood_fn, log_prior_fn, dataset)
     return log_prob[0], acc[0]
 
   hmc_update = hmc.make_adaptive_hmc_update(
       log_prob_and_grad_fn, log_prior_diff_fn)
 
   def update(
-      params, log_likelihood, state_grad, key, step_size, trajectory_len,
-      do_mh_correction):
-    params, log_likelihood, state_grad, step_size, accept_prob = hmc_update(
-        params, log_likelihood, state_grad, key, step_size, trajectory_len,
-        target_accept_rate=target_accept_rate,
-        step_size_adaptation_speed=step_size_adaptation_speed,
-        do_mh_correction=do_mh_correction)
+      params, net_state, log_likelihood, state_grad, key, step_size,
+      trajectory_len, do_mh_correction
+  ):
+    params, net_state, log_likelihood, state_grad, step_size, accept_prob = (
+        hmc_update(
+            params, net_state, log_likelihood, state_grad, key, step_size,
+            trajectory_len, target_accept_rate=target_accept_rate,
+            step_size_adaptation_speed=step_size_adaptation_speed,
+            do_mh_correction=do_mh_correction))
     key, = jax.random.split(key, 1)
-    return params, log_likelihood, state_grad, step_size, key, accept_prob
+    return (params, net_state, log_likelihood, state_grad, step_size, key,
+            accept_prob)
 
   def evaluate(params):
     test_log_prob, test_acc = log_prob_and_acc(params, test_set)
@@ -97,18 +101,18 @@ def make_hmc_update_eval_fns(
   return update, evaluate, log_prob_and_grad_fn
 
 
-def make_checkpoint_dict(params, key, step_size, trajectory_len):
+def make_checkpoint_dict(params, state, key, step_size):
   checkpoint_dict = {
       "params": params,
+      "state": state,
       "key": key,
       "step_size": step_size,
-      "traj_len": trajectory_len
   }
   return checkpoint_dict
 
 
 def parse_checkpoint_dict(checkpoint_dict):
-  field_names = ["params", "key", "step_size", "traj_len"]
+  field_names = ["params", "state", "key", "step_size"]
   return [checkpoint_dict[name] for name in field_names]
 
 
