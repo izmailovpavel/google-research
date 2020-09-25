@@ -93,9 +93,9 @@ def make_hmc_update_eval_fns(
     return (params, net_state, log_likelihood, state_grad, step_size, key,
             accept_prob)
 
-  def evaluate(params):
-    test_log_prob, test_acc = log_prob_and_acc(params, test_set)
-    train_log_prob, train_acc = log_prob_and_acc(params, train_set)
+  def evaluate(params, net_state):
+    test_log_prob, test_acc = log_prob_and_acc(params, net_state, test_set)
+    train_log_prob, train_acc = log_prob_and_acc(params, net_state, train_set)
     return test_log_prob, test_acc, train_log_prob, train_acc
 
   return update, evaluate, log_prob_and_grad_fn

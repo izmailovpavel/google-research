@@ -117,9 +117,10 @@ def train_model():
     else:
       print("Starting from random initialization with provided seed")
       init_data = jax.tree_map(lambda elem: elem[0], train_set)
-      params, net_state = net.init(net_init_key, init_data)
+      params, net_state = net.init(net_init_key, init_data, True)
 
-  log_prob, state_grad, log_likelihood, _ = log_prob_and_grad_fn(params)
+  log_prob, state_grad, log_likelihood, _, net_state = (
+      log_prob_and_grad_fn(params, net_state))
   tabulate_columns = ["iteration",  "train_ll", "train_logprob", "train_acc",
                       "test_logprob", "test_acc", "step_size", "accept_prob",
                       "time"]
@@ -137,7 +138,7 @@ def train_model():
     do_mh_correction = (iteration >= args.num_burn_in_iterations)
     (params, net_state, log_likelihood, state_grad, step_size, key,
      accept_prob) = (
-        update_fn(params, log_likelihood, state_grad,
+        update_fn(params, net_state, log_likelihood, state_grad,
                   key, step_size, trajectory_len, do_mh_correction)
     )
     iteration_time = time.time() - start_time
@@ -168,7 +169,8 @@ def train_model():
     train_utils.save_checkpoint(checkpoint_path, checkpoint_dict)
 
     if iteration % args.eval_freq == 0:
-      test_log_prob, test_acc, train_log_prob, train_acc = eval_fn(params)
+      test_log_prob, test_acc, train_log_prob, train_acc = (
+          eval_fn(params, net_state))
       with tf_writer.as_default():
         tf.summary.scalar("train/log_prob", train_log_prob,
                           step=iteration)
