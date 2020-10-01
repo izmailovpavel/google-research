@@ -98,8 +98,8 @@ def pmap_get_log_prob_and_accuracy(
 
 
 @functools.partial(
-    jax.pmap, axis_name='i', static_broadcasted_argnums=[0, 4],
-    in_axes=(None, None, None, 0, None)
+    jax.pmap, axis_name='i', static_broadcasted_argnums=[0, 4, 5],
+    in_axes=(None, None, None, 0, None, None)
 )
 def pmap_get_softmax_predictions(
     net, params, net_state, dataset, num_batches, is_training=False
@@ -111,7 +111,7 @@ def pmap_get_softmax_predictions(
       lambda x: x.reshape((num_batches, batch_size, *x.shape[1:])), dataset)
 
   def get_batch_predictions(_, x):
-    y = net.apply(params, net_state, None, x, is_training)
+    y, _ = net.apply(params, net_state, None, x, is_training)
     batch_predictions = jax.nn.softmax(y)
     return None, batch_predictions
 

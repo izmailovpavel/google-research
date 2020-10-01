@@ -23,6 +23,7 @@ import jax.numpy as jnp
 import numpy as onp
 import pickle
 import re
+from haiku._src.data_structures import FlatMapping
 
 from bnn_hmc import hmc
 from bnn_hmc import nn_loss
@@ -83,7 +84,8 @@ def make_hmc_update_eval_fns(
       params, net_state, log_likelihood, state_grad, key, step_size,
       trajectory_len, do_mh_correction
   ):
-    params, net_state, log_likelihood, state_grad, step_size, accept_prob = (
+    (params, net_state, log_likelihood, state_grad, step_size, accept_prob,
+     accepted) = (
         hmc_update(
             params, net_state, log_likelihood, state_grad, key, step_size,
             trajectory_len, target_accept_rate=target_accept_rate,
@@ -91,7 +93,7 @@ def make_hmc_update_eval_fns(
             do_mh_correction=do_mh_correction))
     key, = jax.random.split(key, 1)
     return (params, net_state, log_likelihood, state_grad, step_size, key,
-            accept_prob)
+            accept_prob, accepted)
 
   def evaluate(params, net_state):
     test_log_prob, test_acc = log_prob_and_acc(params, net_state, test_set)
@@ -101,18 +103,30 @@ def make_hmc_update_eval_fns(
   return update, evaluate, log_prob_and_grad_fn
 
 
-def make_checkpoint_dict(params, state, key, step_size):
+def make_checkpoint_dict(
+    params, state, key, step_size, accepted, num_ensembled,
+    ensemble_predicted_probs
+):
   checkpoint_dict = {
-      "params": params,
-      "state": state,
-      "key": key,
-      "step_size": step_size,
+    "params": params,
+    "state": state,
+    "key": key,
+    "step_size": step_size,
+    "accepted": accepted,
+    "num_ensembled": num_ensembled,
+    "ensemble_predicted_probs": ensemble_predicted_probs
   }
   return checkpoint_dict
 
 
 def parse_checkpoint_dict(checkpoint_dict):
-  field_names = ["params", "state", "key", "step_size"]
+  if "state" not in checkpoint_dict.keys():
+    checkpoint_dict["state"] = FlatMapping({})
+  for key in ["accepted", "num_ensembled", "ensemble_predicted_probs"]:
+    if key not in checkpoint_dict.keys():
+      checkpoint_dict[key] = None
+  field_names = ["params", "state", "key", "step_size", "accepted",
+                 "num_ensembled", "ensemble_predicted_probs"]
   return [checkpoint_dict[name] for name in field_names]
 
 
