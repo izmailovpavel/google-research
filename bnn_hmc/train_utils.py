@@ -50,7 +50,7 @@ def make_optimizer(lr_schedule, momentum_decay):
 
 
 def make_hmc_update_eval_fns(
-    net,
+    net_apply,
     train_set,
     test_set,
     log_likelihood_fn,
@@ -65,7 +65,7 @@ def make_hmc_update_eval_fns(
 
     likelihood, likelihood_grad, net_state = (
         nn_loss.pmap_get_log_likelihood_and_grad(
-            net, params, net_state, log_likelihood_fn, train_set))
+            net_apply, params, net_state, log_likelihood_fn, train_set))
     prior, prior_grad = jax.value_and_grad(log_prior_fn)(params)
     log_prob = likelihood[0] + prior
     grad = jax.tree_multimap(lambda g_l, g_p: g_l[0] + g_p,
@@ -74,7 +74,7 @@ def make_hmc_update_eval_fns(
 
   def log_prob_and_acc(params, net_state, dataset):
     log_prob, acc, _ = nn_loss.pmap_get_log_prob_and_accuracy(
-        net, params, net_state, log_likelihood_fn, log_prior_fn, dataset)
+        net_apply, params, net_state, log_likelihood_fn, log_prior_fn, dataset)
     return log_prob[0], acc[0]
 
   hmc_update = hmc.make_adaptive_hmc_update(

@@ -33,10 +33,10 @@ from bnn_hmc import tree_utils
 # LikelihoodFn = Callable[[hk.Transformed, hk.Params, Batch], LossAcc]
 
 
-def xent_log_likelihood(net, params, net_state, batch, is_training):
+def xent_log_likelihood(net_apply, params, net_state, batch, is_training):
   """Computes the negative log-likelihood."""
   _, y = batch
-  logits, net_state = net.apply(params, net_state, None, batch, is_training)
+  logits, net_state = net_apply(params, net_state, None, batch, is_training)
   labels = jax.nn.one_hot(y, 10)
   softmax_xent = jnp.sum(labels * jax.nn.log_softmax(logits))
 
@@ -63,15 +63,15 @@ def make_gaussian_log_prior(weight_decay):
 
 @functools.partial(
     jax.pmap, axis_name='i', static_broadcasted_argnums=[0, 3],
-    in_axes=(None, None, None, None, 0)
+    in_axes=(None, None, 0, None, 0)
 )
 def pmap_get_log_likelihood_and_grad(
-    net, params, net_state, likelihood_fn, dataset
+    net_apply, params, net_state, likelihood_fn, dataset
 ):
   loss_acc_val_grad = jax.value_and_grad(likelihood_fn, has_aux=True,
                                          argnums=1)
   (likelihood, (_, net_state)), likelihood_grad = (
-      loss_acc_val_grad(net, params, net_state, dataset, is_training=True))
+      loss_acc_val_grad(net_apply, params, net_state, dataset, is_training=True))
   likelihood = jax.lax.psum(likelihood, axis_name='i')
   likelihood_grad = jax.lax.psum(likelihood_grad, axis_name='i')
   return likelihood, likelihood_grad, net_state
@@ -79,15 +79,15 @@ def pmap_get_log_likelihood_and_grad(
 
 @functools.partial(
     jax.pmap, axis_name='i', static_broadcasted_argnums=[0, 3, 4],
-    in_axes=(None, None, None, None, None, 0)
+    in_axes=(None, None, 0, None, None, 0)
 )
 def pmap_get_log_prob_and_accuracy(
-    net, params, net_state, likelihood_fn, prior_fn, dataset, is_training=False
+    net_apply, params, net_state, likelihood_fn, prior_fn, dataset, is_training=False
 ):
   """Computes posterior density value and accuracy via pmap."""
 
   likelihood, (acc, net_state) = likelihood_fn(
-      net, params, net_state, dataset, is_training)
+      net_apply, params, net_state, dataset, is_training)
   prior = prior_fn(params)
 
   acc = jax.lax.pmean(acc, axis_name='i')
@@ -99,10 +99,10 @@ def pmap_get_log_prob_and_accuracy(
 
 @functools.partial(
     jax.pmap, axis_name='i', static_broadcasted_argnums=[0, 4, 5],
-    in_axes=(None, None, None, 0, None, None)
+    in_axes=(None, None, 0, 0, None, None)
 )
 def pmap_get_softmax_predictions(
-    net, params, net_state, dataset, num_batches, is_training=False
+    net_apply, params, net_state, dataset, num_batches, is_training=False
 ):
   """Computes predictions via pmap."""
 
@@ -111,7 +111,7 @@ def pmap_get_softmax_predictions(
       lambda x: x.reshape((num_batches, batch_size, *x.shape[1:])), dataset)
 
   def get_batch_predictions(_, x):
-    y, _ = net.apply(params, net_state, None, x, is_training)
+    y, _ = net_apply(params, net_state, None, x, is_training)
     batch_predictions = jax.nn.softmax(y)
     return None, batch_predictions
 

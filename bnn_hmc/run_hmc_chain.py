@@ -5,6 +5,7 @@ import sys
 from jax.config import config
 import haiku as hk
 import numpy as onp
+from jax import numpy as jnp
 import jax
 import tensorflow.compat.v2 as tf
 import argparse
@@ -75,10 +76,11 @@ def train_model():
   
   train_set, test_set, num_classes = data.make_ds_pmap_fullbatch(name=args.dataset_name)
   net_fn = _MODEL_FNS[args.model_name](num_classes)
-  net_fn = jax.experimental.callback.rewrite(
-      net_fn,
-      precision_utils.HIGH_PRECISION_RULES)
   net = hk.transform_with_state(net_fn)
+  net_apply = net.apply
+  net_apply = jax.experimental.callback.rewrite(
+    net_apply,
+    precision_utils.HIGH_PRECISION_RULES)
   
   log_likelihood_fn = nn_loss.xent_log_likelihood
   log_prior_fn, log_prior_diff = (
@@ -86,7 +88,7 @@ def train_model():
 
   update_fn, eval_fn, log_prob_and_grad_fn = (
       train_utils.make_hmc_update_eval_fns(
-          net, train_set, test_set, log_likelihood_fn, log_prior_fn,
+          net_apply, train_set, test_set, log_likelihood_fn, log_prior_fn,
           log_prior_diff, args.target_accept_rate,
           args.step_size_adaptation_speed))
 
@@ -120,6 +122,7 @@ def train_model():
       print("Starting from random initialization with provided seed")
       init_data = jax.tree_map(lambda elem: elem[0][:1], train_set)
       params, net_state = net.init(net_init_key, init_data, True)
+      net_state = jax.pmap(lambda _: net_state)(jnp.arange(len(jax.devices())))
       n_ensembled = 0
       ensemble_predicted_probs = None
 
@@ -155,7 +158,7 @@ def train_model():
 
     if do_mh_correction and accepted:
       predicted_probs = nn_loss.pmap_get_softmax_predictions(
-        net, params, net_state, test_set, 1, False)
+        net_apply, params, net_state, test_set, 1, False)
       predicted_probs = onp.asarray(predicted_probs)
       if n_ensembled:
         ensemble_predicted_probs += (
@@ -163,7 +166,9 @@ def train_model():
       else:
         ensemble_predicted_probs = predicted_probs
       n_ensembled += 1
-      ensemble_preds = onp.argmax(ensemble_predicted_probs, -1)
+      ensemble_preds = onp.argmax(ensemble_predicted_probs, -1)[:, 0]
+      print(ensemble_preds.shape)
+      print(test_set[1].shape)
       ensemble_acc = (ensemble_preds == test_set[1]).mean()
 
     test_log_prob, test_acc, train_log_prob, train_acc = (
