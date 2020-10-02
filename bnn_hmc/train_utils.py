@@ -21,10 +21,8 @@ import jax
 from jax.experimental import optix
 import jax.numpy as jnp
 import numpy as onp
-import pickle
-import re
 import functools
-from haiku._src.data_structures import FlatMapping
+import os
 
 from bnn_hmc import hmc
 from bnn_hmc import nn_loss
@@ -32,7 +30,6 @@ from bnn_hmc import nn_loss
 
 LRSchedule = Callable[[jnp.ndarray], jnp.ndarray]
 Opt = optix.GradientTransformation
-_CHECKPOINT_FORMAT_STRING = "model_step_{}.pt"
 
 
 def make_cosine_lr_schedule(init_lr, total_steps):
@@ -157,64 +154,3 @@ def make_sgd_train_epoch(loss_grad_fn, optimizer, num_batches):
     new_key, = jax.random.split(key, 1)
     return losses, params, net_state, opt_state, new_key
   return sgd_train_epoch
-
-
-def make_checkpoint_dict(
-    params, state, key, step_size, accepted, num_ensembled,
-    ensemble_predicted_probs
-):
-  checkpoint_dict = {
-    "params": params,
-    "state": state,
-    "key": key,
-    "step_size": step_size,
-    "accepted": accepted,
-    "num_ensembled": num_ensembled,
-    "ensemble_predicted_probs": ensemble_predicted_probs
-  }
-  return checkpoint_dict
-
-
-def parse_checkpoint_dict(checkpoint_dict):
-  if "state" not in checkpoint_dict.keys():
-    checkpoint_dict["state"] = FlatMapping({})
-  for key in ["accepted", "num_ensembled", "ensemble_predicted_probs"]:
-    if key not in checkpoint_dict.keys():
-      checkpoint_dict[key] = None
-  field_names = ["params", "state", "key", "step_size", "accepted",
-                 "num_ensembled", "ensemble_predicted_probs"]
-  return [checkpoint_dict[name] for name in field_names]
-
-
-def load_checkpoint(path):
-    with open(path, "rb") as f:
-        checkpoint_dict = pickle.load(f)
-    return parse_checkpoint_dict(checkpoint_dict)
-
-
-def save_checkpoint(path, checkpoint_dict):
-    with open(path, "wb") as f:
-        pickle.dump(checkpoint_dict, f)
-
-
-def _checkpoint_pattern():
-    pattern_string = _CHECKPOINT_FORMAT_STRING.format("(?P<step>[0-9]+)")
-    return re.compile(pattern_string)
-
-
-def _match_checkpoint_pattern(name):
-    pattern = _checkpoint_pattern()
-    return pattern.match(name)
-
-
-def name_is_checkpoint(name):
-    return bool(_match_checkpoint_pattern(name))
-
-
-def parse_checkpoint_name(name):
-    match = _match_checkpoint_pattern(name)
-    return int(match.group("step"))
-
-
-def make_checkpoint_name(step):
-    return _CHECKPOINT_FORMAT_STRING.format(step)
