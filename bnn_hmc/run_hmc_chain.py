@@ -4,6 +4,8 @@ import os
 import sys
 from jax.config import config
 import haiku as hk
+import numpy as onp
+from jax import numpy as jnp
 import jax
 import tensorflow.compat.v2 as tf
 import argparse
@@ -42,8 +44,6 @@ parser.add_argument("--weight_decay", type=float, default=15.,
                     help="Wight decay, equivalent to setting prior std")
 parser.add_argument("--init_checkpoint", type=str, default=None,
                     help="Checkpoint to use for initialization of the chain")
-parser.add_argument("--eval_freq", type=int, default=10,
-                    help="Frequency of evaluations")
 parser.add_argument("--tabulate_freq", type=int, default=40,
                     help="Frequency of tabulate table header prints")
 parser.add_argument("--dir", type=str, default=None, required=True,
@@ -63,9 +63,9 @@ _MODEL_FNS = {"lenet": models.make_lenet_fn,
 
 
 def train_model():
-  subdirname = "seed_{}_wd_{}_stepsize_{}_trajlen_{}_niter{}".format(
-      args.seed, args.weight_decay, args.step_size, args.trajectory_len,
-      args.num_iterations)
+  subdirname = "wd_{}_stepsize_{}_trajlen_{}_seed_{}_burnin_{}_{}".format(
+      args.weight_decay, args.step_size, args.trajectory_len,
+      args.seed, args.num_burn_in_iterations, args.burn_in_step_size_factor)
   dirname = os.path.join(args.dir, subdirname)
   os.makedirs(dirname, exist_ok=True)
   with open(os.path.join(dirname, "comand.sh"), "w") as f:
@@ -76,20 +76,26 @@ def train_model():
   
   train_set, test_set, num_classes = data.make_ds_pmap_fullbatch(name=args.dataset_name)
   net_fn = _MODEL_FNS[args.model_name](num_classes)
-  net_fn = jax.experimental.callback.rewrite(
-      net_fn,
-      precision_utils.HIGH_PRECISION_RULES)
   net = hk.transform_with_state(net_fn)
+  net_apply = net.apply
+  net_apply = jax.experimental.callback.rewrite(
+    net_apply,
+    precision_utils.HIGH_PRECISION_RULES)
   
   log_likelihood_fn = nn_loss.xent_log_likelihood
   log_prior_fn, log_prior_diff = (
       nn_loss.make_gaussian_log_prior(weight_decay=args.weight_decay))
 
-  update_fn, eval_fn, log_prob_and_grad_fn = (
-      train_utils.make_hmc_update_eval_fns(
-          net, train_set, test_set, log_likelihood_fn, log_prior_fn,
-          log_prior_diff, args.target_accept_rate,
-          args.step_size_adaptation_speed))
+  log_prob_and_grad_fn, log_prob_and_acc_fn = (
+      train_utils.make_log_prob_grad_and_eval_fns(
+          net_apply, log_likelihood_fn, log_prior_fn, train_set))
+  update_fn = train_utils.make_hmc_update_eval_fns(
+      log_prob_and_grad_fn,
+      log_prior_diff, args.target_accept_rate,
+      args.step_size_adaptation_speed)
+  
+  eval_fn = train_utils.make_evaluate_fn(
+      log_prob_and_acc_fn, [train_set, test_set])
 
   trajectory_len = args.trajectory_len
   
@@ -101,7 +107,8 @@ def train_model():
     start_iteration = max(checkpoint_iteration)
     start_checkpoint_path = (
         os.path.join(dirname, train_utils.make_checkpoint_name(start_iteration)))
-    params, net_state, key, step_size = (
+    (params, net_state, key, step_size, _, n_ensembled,
+     ensemble_predicted_probs) = (
         train_utils.load_checkpoint(start_checkpoint_path))
 
   else:
@@ -113,18 +120,23 @@ def train_model():
       print("Resuming the run from the provided init_checkpoint")
       params, net_state, _, _ = (
           train_utils.load_checkpoint(args.init_checkpoint))
+      n_ensembled = 0
+      ensemble_predicted_probs = None
 
     else:
       print("Starting from random initialization with provided seed")
-      init_data = jax.tree_map(lambda elem: elem[0], train_set)
+      init_data = jax.tree_map(lambda elem: elem[0][:1], train_set)
       params, net_state = net.init(net_init_key, init_data, True)
+      n_devices = len(jax.devices())
+      net_state = jax.pmap(lambda _: net_state)(jnp.arange(n_devices))
+      n_ensembled = 0
+      ensemble_predicted_probs = None
 
   log_prob, state_grad, log_likelihood, _, net_state = (
       log_prob_and_grad_fn(params, net_state))
-  tabulate_columns = ["iteration",  "train_ll", "train_logprob", "train_acc",
-                      "test_logprob", "test_acc", "step_size", "accept_prob",
-                      "time"]
 
+  ensemble_acc = 0
+  
   for iteration in range(start_iteration, args.num_iterations):
     
     # do a linear ramp-down of the step-size in the burn-in phase
@@ -137,52 +149,64 @@ def train_model():
     start_time = time.time()
     do_mh_correction = (iteration >= args.num_burn_in_iterations)
     (params, net_state, log_likelihood, state_grad, step_size, key,
-     accept_prob) = (
+     accept_prob, accepted) = (
         update_fn(params, net_state, log_likelihood, state_grad,
                   key, step_size, trajectory_len, do_mh_correction)
     )
     iteration_time = time.time() - start_time
 
+    checkpoint_name = train_utils.make_checkpoint_name(iteration)
+    checkpoint_path = os.path.join(dirname, checkpoint_name)
+    checkpoint_dict = train_utils.make_checkpoint_dict(
+      params, net_state, key, step_size, accepted, n_ensembled,
+      ensemble_predicted_probs)
+    train_utils.save_checkpoint(checkpoint_path, checkpoint_dict)
+
+    if do_mh_correction and accepted:
+      predicted_probs = nn_loss.pmap_get_softmax_predictions(
+        net_apply, params, net_state, test_set, 1, False)
+      predicted_probs = onp.asarray(predicted_probs)
+      if n_ensembled:
+        ensemble_predicted_probs += (
+            (predicted_probs - ensemble_predicted_probs) / (n_ensembled + 1))
+      else:
+        ensemble_predicted_probs = predicted_probs
+      n_ensembled += 1
+      ensemble_preds = onp.argmax(ensemble_predicted_probs, -1)[:, 0]
+      ensemble_acc = (ensemble_preds == test_set[1]).mean()
+
+    (test_log_prob, test_acc), (train_log_prob, train_acc) = (
+      eval_fn(params, net_state))
+      
+    tabulate_dict = OrderedDict()
+    tabulate_dict["iteration"] = iteration
+    tabulate_dict["step_size"] = step_size
+    tabulate_dict["train_logprob"] = log_prob
+    tabulate_dict["test_logprob"] = test_log_prob
+    tabulate_dict["train_acc"] = train_acc
+    tabulate_dict["test_acc"] = test_acc
+    tabulate_dict["accept_prob"] = accept_prob
+    tabulate_dict["accepted"] = accepted
+    tabulate_dict["ensemble_acc"] = ensemble_acc
+    tabulate_dict["n_ens"] = n_ensembled
+    tabulate_dict["time"] = iteration_time
+
     with tf_writer.as_default():
       tf.summary.scalar("train/log_likelihood", log_likelihood, step=iteration)
+      tf.summary.scalar("train/log_prob", train_log_prob, step=iteration)
+      tf.summary.scalar("test/log_prob", test_log_prob, step=iteration)
+      tf.summary.scalar("train/accuracy", train_acc, step=iteration)
+      tf.summary.scalar("test/accuracy", test_acc, step=iteration)
+      tf.summary.scalar("test/ens_accuracy", ensemble_acc, step=iteration)
       tf.summary.scalar("hypers/step_size", step_size, step=iteration)
       tf.summary.scalar("hypers/trajectory_len", trajectory_len,
                         step=iteration)
       tf.summary.scalar("debug/accept_prob", accept_prob, step=iteration)
       tf.summary.scalar("debug/do_mh_correction", float(do_mh_correction),
                         step=iteration)
-      tf.summary.scalar("debug/iteration_time", iteration_time,
-                        step=iteration)
-
-    tabulate_dict = OrderedDict(
-        zip(tabulate_columns, [None] * len(tabulate_columns)))
-    tabulate_dict["train_ll"] = log_likelihood
-    tabulate_dict["iteration"] = iteration
-    tabulate_dict["step_size"] = step_size
-    tabulate_dict["accept_prob"] = accept_prob
-    tabulate_dict["time"] = iteration_time
-
-    checkpoint_name = train_utils.make_checkpoint_name(iteration)
-    checkpoint_path = os.path.join(dirname, checkpoint_name)
-    checkpoint_dict = train_utils.make_checkpoint_dict(
-        params, net_state, key, step_size)
-    train_utils.save_checkpoint(checkpoint_path, checkpoint_dict)
-
-    if iteration % args.eval_freq == 0:
-      test_log_prob, test_acc, train_log_prob, train_acc = (
-          eval_fn(params, net_state))
-      with tf_writer.as_default():
-        tf.summary.scalar("train/log_prob", train_log_prob,
-                          step=iteration)
-        tf.summary.scalar("test/log_prob", test_log_prob,
-                          step=iteration)
-        tf.summary.scalar("train/accuracy", train_acc, step=iteration)
-        tf.summary.scalar("test/accuracy", test_acc, step=iteration)
-
-      tabulate_dict["train_logprob"] = log_prob
-      tabulate_dict["test_logprob"] = test_log_prob
-      tabulate_dict["train_acc"] = train_acc
-      tabulate_dict["test_acc"] = test_acc
+      tf.summary.scalar("debug/iteration_time", iteration_time, step=iteration)
+      tf.summary.scalar("debug/accepted", accepted, step=iteration)
+      tf.summary.scalar("debug/n_ens", n_ensembled, step=iteration)
 
     table = tabulate.tabulate([tabulate_dict.values()],
                               tabulate_dict.keys(),

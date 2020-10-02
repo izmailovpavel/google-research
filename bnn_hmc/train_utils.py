@@ -23,6 +23,8 @@ import jax.numpy as jnp
 import numpy as onp
 import pickle
 import re
+import functools
+from haiku._src.data_structures import FlatMapping
 
 from bnn_hmc import hmc
 from bnn_hmc import nn_loss
@@ -33,8 +35,7 @@ Opt = optix.GradientTransformation
 _CHECKPOINT_FORMAT_STRING = "model_step_{}.pt"
 
 
-def make_cosine_lr_schedule(init_lr,
-                            total_steps):
+def make_cosine_lr_schedule(init_lr, total_steps):
   """Cosine LR schedule."""
   def schedule(step):
     t = step / total_steps
@@ -43,38 +44,62 @@ def make_cosine_lr_schedule(init_lr,
 
 
 def make_optimizer(lr_schedule, momentum_decay):
+  # Maximize log-prob instead of minimizing loss
   return optix.chain(optix.trace(decay=momentum_decay, nesterov=False),
-                     optix.scale_by_schedule(lr_schedule),
-                     optix.scale(-1))
+                     optix.scale_by_schedule(lr_schedule))
 
 
-def make_hmc_update_eval_fns(
-    net,
-    train_set,
-    test_set,
-    log_likelihood_fn,
-    log_prior_fn,
-    log_prior_diff_fn,
-    target_accept_rate,
-    step_size_adaptation_speed
+def make_log_prob_and_grad_fn(
+    net_apply, log_likelihood_fn, log_prior_fn
 ):
-  """Make update and ev0al functions for HMC training."""
-
-  def log_prob_and_grad_fn(params, net_state):
-
+  def log_prob_and_grad_fn(params, net_state, dataset):
     likelihood, likelihood_grad, net_state = (
         nn_loss.pmap_get_log_likelihood_and_grad(
-            net, params, net_state, log_likelihood_fn, train_set))
+            net_apply, params, net_state, log_likelihood_fn, dataset))
     prior, prior_grad = jax.value_and_grad(log_prior_fn)(params)
     log_prob = likelihood[0] + prior
     grad = jax.tree_multimap(lambda g_l, g_p: g_l[0] + g_p,
                              likelihood_grad, prior_grad)
     return log_prob, grad, likelihood[0], prior, net_state
 
-  def log_prob_and_acc(params, net_state, dataset):
+  return log_prob_and_grad_fn
+
+
+def make_log_prob_and_grad_nopmap_fn(
+    net_apply, log_likelihood_fn, log_prior_fn
+):
+  def log_prob_and_grad_fn(params, net_state, batch, total_num_data):
+    loss_acc_val_grad = jax.value_and_grad(log_likelihood_fn, has_aux=True,
+                                           argnums=1)
+    (likelihood, (_, net_state)), likelihood_grad = (
+      loss_acc_val_grad(net_apply, params, net_state, batch, is_training=True)
+    )
+    prior, prior_grad = jax.value_and_grad(log_prior_fn)(params)
+    coefficient = total_num_data / jnp.size(batch[1])
+    log_prob = coefficient * likelihood + prior
+    grad = jax.tree_multimap(lambda g_l, g_p: coefficient * g_l + g_p,
+                             likelihood_grad, prior_grad)
+    return log_prob, grad, likelihood, prior, net_state
+
+  return log_prob_and_grad_fn
+
+
+def make_log_prob_and_acc_fn(
+    net_apply, log_likelihood_fn, log_prior_fn
+):
+  def log_prob_and_acc_fn(params, net_state, dataset):
     log_prob, acc, _ = nn_loss.pmap_get_log_prob_and_accuracy(
-        net, params, net_state, log_likelihood_fn, log_prior_fn, dataset)
+      net_apply, params, net_state, log_likelihood_fn, log_prior_fn, dataset)
     return log_prob[0], acc[0]
+  
+  return log_prob_and_acc_fn
+
+
+def make_hmc_update_eval_fns(
+    log_prob_and_grad_fn, log_prior_diff_fn, target_accept_rate=0.9,
+    step_size_adaptation_speed=0.
+):
+  """Make update and ev0al functions for HMC training."""
 
   hmc_update = hmc.make_adaptive_hmc_update(
       log_prob_and_grad_fn, log_prior_diff_fn)
@@ -83,7 +108,8 @@ def make_hmc_update_eval_fns(
       params, net_state, log_likelihood, state_grad, key, step_size,
       trajectory_len, do_mh_correction
   ):
-    params, net_state, log_likelihood, state_grad, step_size, accept_prob = (
+    (params, net_state, log_likelihood, state_grad, step_size, accept_prob,
+     accepted) = (
         hmc_update(
             params, net_state, log_likelihood, state_grad, key, step_size,
             trajectory_len, target_accept_rate=target_accept_rate,
@@ -91,28 +117,72 @@ def make_hmc_update_eval_fns(
             do_mh_correction=do_mh_correction))
     key, = jax.random.split(key, 1)
     return (params, net_state, log_likelihood, state_grad, step_size, key,
-            accept_prob)
+            accept_prob, accepted)
 
-  def evaluate(params, net_state):
-    test_log_prob, test_acc = log_prob_and_acc(params, net_state, test_set)
-    train_log_prob, train_acc = log_prob_and_acc(params, net_state, train_set)
-    return test_log_prob, test_acc, train_log_prob, train_acc
-
-  return update, evaluate, log_prob_and_grad_fn
+  return update, log_prob_and_grad_fn
 
 
-def make_checkpoint_dict(params, state, key, step_size):
+def make_sgd_train_epoch(loss_grad_fn, optimizer, num_batches):
+  """
+  Make a training epoch function for SGD-like optimizers.
+  """
+  
+  @functools.partial(
+    jax.pmap, axis_name='i', static_broadcasted_argnums=[],
+    in_axes=(None, 0, None, 0, 0)
+  )
+  def sgd_train_epoch(params, net_state, opt_state, train_set, key):
+    n_data = train_set[0].shape[0]
+    batch_size = n_data // num_batches
+    indices = jax.random.permutation(key, jnp.arange(n_data))
+    indices = jax.tree_map(
+        lambda x: x.reshape((num_batches, batch_size)), indices)
+
+    total_num_data = jax.lax.psum(jnp.size(train_set[1]), axis_name='i')
+    
+    def train_step(carry, batch_indices):
+      batch = jax.tree_map(lambda x: x[batch_indices], train_set)
+      params_, net_state_, opt_state_ = carry
+      loss, grad, _, _, net_state_ = loss_grad_fn(
+        params_, net_state_, batch, total_num_data)
+      grad = jax.lax.psum(grad, axis_name='i')
+      
+      updates, opt_state_ = optimizer.update(grad, opt_state_)
+      params_ = optix.apply_updates(params_, updates)
+      return (params_, net_state_, opt_state_), loss
+    
+    (params, net_state, opt_state), losses = jax.lax.scan(
+        train_step, (params, net_state, opt_state), indices)
+    
+    new_key, = jax.random.split(key, 1)
+    return losses, params, net_state, opt_state, new_key
+  return sgd_train_epoch
+
+
+def make_checkpoint_dict(
+    params, state, key, step_size, accepted, num_ensembled,
+    ensemble_predicted_probs
+):
   checkpoint_dict = {
-      "params": params,
-      "state": state,
-      "key": key,
-      "step_size": step_size,
+    "params": params,
+    "state": state,
+    "key": key,
+    "step_size": step_size,
+    "accepted": accepted,
+    "num_ensembled": num_ensembled,
+    "ensemble_predicted_probs": ensemble_predicted_probs
   }
   return checkpoint_dict
 
 
 def parse_checkpoint_dict(checkpoint_dict):
-  field_names = ["params", "state", "key", "step_size"]
+  if "state" not in checkpoint_dict.keys():
+    checkpoint_dict["state"] = FlatMapping({})
+  for key in ["accepted", "num_ensembled", "ensemble_predicted_probs"]:
+    if key not in checkpoint_dict.keys():
+      checkpoint_dict[key] = None
+  field_names = ["params", "state", "key", "step_size", "accepted",
+                 "num_ensembled", "ensemble_predicted_probs"]
   return [checkpoint_dict[name] for name in field_names]
 
 

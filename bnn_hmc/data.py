@@ -32,9 +32,8 @@ _ALL_DS_STATS = {
 
 
 def load_dataset(
-    split,
-    batch_size,
-    name = "cifar10"
+    split, batch_size, name="cifar10", repeat=False, shuffle=False,
+    shuffle_seed=None
 ):
   """Loads the dataset as a generator of batches."""
   # Do no data augmentation.
@@ -60,6 +59,10 @@ def load_dataset(
   ds = ds.map(img_normalize)
   if batch_size == -1:
     batch_size = num_examples
+  if repeat:
+    ds = ds.repeat()
+  if shuffle:
+    ds = ds.shuffle(buffer_size=10 * batch_size, seed=shuffle_seed)
   ds = ds.batch(batch_size)
   return tfds.as_numpy(ds), num_classes, num_examples
 
@@ -77,9 +80,13 @@ def batch_split_axis(batch,
   return tuple(arr.reshape([n_split, n_new, *arr.shape[1:]]) for arr in (x, y))
 
 
-def make_ds_pmap_fullbatch(
-    name = "cifar10",
-    n_devices = None):
+def pmap_dataset(ds, n_devices=None):
+  """Shard the dataset to devices."""
+  n_devices = n_devices or len(jax.local_devices())
+  return jax.pmap(lambda x: x)(batch_split_axis(ds, n_devices))
+  
+
+def make_ds_pmap_fullbatch(name="cifar10", n_devices=None):
   """Make train and test sets sharded over batch dim."""
 
   train_set, n_classes, _ = load_dataset("train", -1, name)
@@ -88,9 +95,6 @@ def make_ds_pmap_fullbatch(
   test_set, _, _ = load_dataset("test", -1, name)
   test_set = next(iter(test_set))
 
-  n_devices = n_devices or len(jax.local_devices())
-
-  def pmap_ds(ds):
-    return jax.pmap(lambda x: x)(batch_split_axis(ds, n_devices))
-  train_set, test_set = tuple(pmap_ds(ds) for ds in (train_set, test_set))
+  train_set, test_set = tuple(pmap_dataset(ds, n_devices)
+                              for ds in (train_set, test_set))
   return train_set, test_set, n_classes

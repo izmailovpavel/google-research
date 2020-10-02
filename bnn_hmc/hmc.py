@@ -145,5 +145,6 @@ def make_adaptive_hmc_update(log_prob_and_grad_fn, log_prior_diff_fn):
     else:
       params, log_likelihood, state_grad = (
           new_params, new_log_likelihood, new_grad)
-    return params, net_state, log_likelihood, state_grad, step_size, accept_prob
+    return (params, net_state, log_likelihood, state_grad, step_size,
+            accept_prob, accepted)
   return adaptive_hmc_update
