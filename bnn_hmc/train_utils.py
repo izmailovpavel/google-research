@@ -30,6 +30,7 @@ from bnn_hmc import nn_loss
 
 LRSchedule = Callable[[jnp.ndarray], jnp.ndarray]
 Opt = optix.GradientTransformation
+_CHECKPOINT_FORMAT_STRING = "model_step_{}.pt"
 
 
 def make_cosine_lr_schedule(init_lr, total_steps):
