@@ -16,13 +16,21 @@
 """CNN haiku models."""
 
 from typing import Tuple
-
 import haiku as hk
 import jax
 import jax.numpy as jnp
+from jax.experimental.callback import rewrite
+
+from bnn_hmc import precision_utils
 
 
 Batch = Tuple[jnp.ndarray, jnp.ndarray]
+_DEFAULT_BN_CONFIG = {
+  'decay_rate': 0.9,
+  'eps': 1e-5,
+  'create_scale': True,
+  'create_offset': True
+}
 
 
 def make_lenet_fn(num_classes):
@@ -51,11 +59,79 @@ def make_lenet_fn(num_classes):
   return lenet_fn
 
 
-def make_resnet_18_fn(num_classes):
-  def resnet18_fn(batch, is_training):
-    """ResNet-18."""
+he_normal = hk.initializers.VarianceScaling(2.0, 'fan_in', 'truncated_normal')
+
+
+def _resnet_layer(
+    inputs, num_filters, kernel_size=3, strides=1, activation=lambda x: x,
+    use_bias=True, is_training=True, bn_config=_DEFAULT_BN_CONFIG
+):
+  x = inputs
+  x = hk.Conv2D(
+      num_filters,
+      kernel_size,
+      stride=strides,
+      padding='same',
+      w_init=he_normal,
+      with_bias=use_bias)(
+          x)
+  x = hk.BatchNorm(**bn_config)(x, is_training=is_training)
+  x = activation(x)
+  return x
+
+
+def make_resnet_fn(
+    num_classes: int,
+    depth: int,
+    width: int = 16,
+    use_bias: bool = True,
+):
+  num_res_blocks = (depth - 2) // 6
+  if (depth - 2) % 6 != 0:
+    raise ValueError('depth must be 6n+2 (e.g. 20, 32, 44).')
+  
+  def forward(batch, is_training):
+    num_filters = width
     x, _ = batch
     x = x.astype(jnp.float32)
-    net = hk.nets.ResNet18(num_classes, resnet_v2=True)
-    return net(x, is_training=is_training)
-  return resnet18_fn
+    x = _resnet_layer(
+        x, num_filters=num_filters, activation=jax.nn.relu, use_bias=use_bias)
+    for stack in range(3):
+      for res_block in range(num_res_blocks):
+        strides = 1
+        if stack > 0 and res_block == 0:  # first layer but not first stack
+          strides = 2  # downsample
+        y = _resnet_layer(
+            x, num_filters=num_filters, strides=strides, activation=jax.nn.relu,
+            use_bias=use_bias, is_training=is_training)
+        y = _resnet_layer(y, num_filters=num_filters, use_bias=use_bias)
+        if stack > 0 and res_block == 0:  # first layer but not first stack
+          # linear projection residual shortcut connection to match changed dims
+          x = _resnet_layer(
+              x, num_filters=num_filters, kernel_size=1, strides=strides,
+              use_bias=use_bias)
+        x = jax.nn.relu(x + y)
+      num_filters *= 2
+    x = hk.AvgPool(8, 8, 'VALID')(x)
+    x = hk.Flatten()(x)
+    logits = hk.Linear(num_classes, w_init=he_normal)(x)
+    return logits
+  return forward
+
+
+def make_resnet20_fn(num_classes):
+  return make_resnet_fn(num_classes, depth=20)
+
+
+def get_model(model_name, num_classes):
+  _MODEL_FNS = {
+    "lenet": make_lenet_fn,
+    "resnet20": make_resnet20_fn,
+  }
+  net_fn = _MODEL_FNS[model_name](num_classes)
+  net = hk.transform_with_state(net_fn)
+  net_apply = net.apply
+  net_apply = jax.experimental.callback.rewrite(
+    net_apply,
+    precision_utils.HIGH_PRECISION_RULES)
+  return net_apply, net.init

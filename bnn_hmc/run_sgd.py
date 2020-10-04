@@ -3,61 +3,40 @@ Run SGD training on a cloud TPU. We are not using data augmentation.
 """
 
 import os
-import sys
 from jax.config import config
-import haiku as hk
 from jax import numpy as jnp
 import jax
 import tensorflow.compat.v2 as tf
 import argparse
 import time
-import tabulate
 from collections import OrderedDict
-from jax.experimental.callback import rewrite
 
 from bnn_hmc import data
 from bnn_hmc import models
 from bnn_hmc import nn_loss
 from bnn_hmc import train_utils
-from bnn_hmc import precision_utils
 from bnn_hmc import checkpoint_utils
+from bnn_hmc import cmd_args_utils
+from bnn_hmc import tabulate_utils
+
 
 parser = argparse.ArgumentParser(description="Run SGD on a cloud TPU")
-parser.add_argument("--tpu_ip", type=str, default="10.0.0.2",
-                    help="Cloud TPU internal ip "
-                         "(see `gcloud compute tpus list`)")
-parser.add_argument("--seed", type=int, default=0, help="Random seed")
+cmd_args_utils.add_common_flags(parser)
 parser.add_argument("--step_size", type=float, default=1.e-6,
                     help="Initial SGD step size")
 parser.add_argument("--num_epochs", type=int, default=300,
                     help="Total number of SGD epochs iterations")
 parser.add_argument("--batch_size", type=int, default=80, help="Batch size")
-parser.add_argument("--weight_decay", type=float, default=15.,
-                    help="Wight decay, equivalent to setting prior std")
 parser.add_argument("--momentum_decay", type=float, default=0.9,
                     help="Momentum decay parameter for SGD")
-parser.add_argument("--init_checkpoint", type=str, default=None,
-                    help="Checkpoint to use for initialization of the chain")
 parser.add_argument("--eval_freq", type=int, default=10,
                     help="Frequency of evaluation (epochs)")
 parser.add_argument("--save_freq", type=int, default=50,
                     help="Frequency of checkpointing (epochs)")
-parser.add_argument("--tabulate_freq", type=int, default=40,
-                    help="Frequency of tabulate table header prints (epochs)")
-parser.add_argument("--dir", type=str, default=None, required=True,
-                    help="Directory for checkpoints and tensorboard logs")
-parser.add_argument("--dataset_name", type=str, default="cifar10",
-                    help="Name of the dataset")
-parser.add_argument("--model_name", type=str, default="lenet",
-                    help="Name of the dataset")
-
 args = parser.parse_args()
 
 config.FLAGS.jax_xla_backend = "tpu_driver"
 config.FLAGS.jax_backend_target = "grpc://{}:8470".format(args.tpu_ip)
-
-_MODEL_FNS = {"lenet": models.make_lenet_fn,
-              "resnet18": models.make_resnet_18_fn}
 
 
 def train_model():
@@ -66,23 +45,17 @@ def train_model():
     args.seed)
   dirname = os.path.join(args.dir, subdirname)
   os.makedirs(dirname, exist_ok=True)
-  with open(os.path.join(dirname, "comand.sh"), "w") as f:
-    f.write(" ".join(sys.argv))
-    f.write("\n")
+  cmd_args_utils.save_cmd(dirname)
   
   tf_writer = tf.summary.create_file_writer(dirname)
   
   train_set, test_set, num_classes = data.make_ds_pmap_fullbatch(
     name=args.dataset_name)
-  net_fn = _MODEL_FNS[args.model_name](num_classes)
-  net = hk.transform_with_state(net_fn)
-  net_apply = net.apply
-  net_apply = jax.experimental.callback.rewrite(
-    net_apply,
-    precision_utils.HIGH_PRECISION_RULES)
+  
+  net_apply, net_init = models.get_model(args.model_name, num_classes)
   
   log_likelihood_fn = nn_loss.xent_log_likelihood
-  log_prior_fn, log_prior_diff = (
+  log_prior_fn, _ = (
     nn_loss.make_gaussian_log_prior(weight_decay=args.weight_decay))
 
   loss_grad_fn = train_utils.make_log_prob_and_grad_nopmap_fn(
@@ -105,7 +78,7 @@ def train_model():
     key, net_init_key = jax.random.split(jax.random.PRNGKey(args.seed), 2)
     print("Starting from random initialization with provided seed")
     init_data = jax.tree_map(lambda elem: elem[0][:1], train_set)
-    params, net_state = net.init(net_init_key, init_data, True)
+    params, net_state = net_init(net_init_key, init_data, True)
     opt_state = optimizer.init(params)
     net_state = jax.pmap(lambda _: net_state)(jnp.arange(num_devices))
     key = jax.random.split(jax.random.PRNGKey(0), num_devices)
@@ -156,7 +129,7 @@ def train_model():
     
     if iteration % args.eval_freq == 0:
       test_log_prob, test_acc = eval_fn(params, net_state, test_set)
-      train_log_prob, train_acc = eval_fn(params, net_state, test_set)
+      train_log_prob, train_acc = eval_fn(params, net_state, train_set)
       
       tabulate_dict["train_logprob"] = train_log_prob
       tabulate_dict["test_logprob"] = test_log_prob
@@ -168,14 +141,8 @@ def train_model():
         tf.summary.scalar("train/accuracy", train_acc, step=iteration)
         tf.summary.scalar("test/accuracy", test_acc, step=iteration)
     
-    table = tabulate.tabulate([tabulate_dict.values()],
-                              tabulate_dict.keys(),
-                              tablefmt='simple', floatfmt='8.7f')
-    if (iteration - start_iteration) % args.tabulate_freq == 0:
-      table = table.split('\n')
-      table = '\n'.join([table[1]] + table)
-    else:
-      table = table.split('\n')[2]
+    table = tabulate_utils.make_table(
+        tabulate_dict, iteration - start_iteration, args.tabulate_freq)
     print(table)
 
 
