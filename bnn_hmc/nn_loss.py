@@ -13,15 +13,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Loss computation for nn."""
-import functools
+"""Likelihood and prior functions."""
 import math
 from typing import Callable, Tuple
 
-import haiku as hk
 import jax
 import jax.numpy as jnp
-import numpy as onp
 
 from bnn_hmc import tree_utils
 
@@ -60,61 +57,3 @@ def make_gaussian_log_prior(weight_decay):
 
   return log_prior, log_prior_diff
 
-
-@functools.partial(
-    jax.pmap, axis_name='i', static_broadcasted_argnums=[0, 3],
-    in_axes=(None, None, 0, None, 0)
-)
-def pmap_get_log_likelihood_and_grad(
-    net_apply, params, net_state, likelihood_fn, dataset
-):
-  loss_acc_val_grad = jax.value_and_grad(likelihood_fn, has_aux=True,
-                                         argnums=1)
-  (likelihood, (_, net_state)), likelihood_grad = (
-      loss_acc_val_grad(net_apply, params, net_state, dataset, is_training=True))
-  likelihood = jax.lax.psum(likelihood, axis_name='i')
-  likelihood_grad = jax.lax.psum(likelihood_grad, axis_name='i')
-  return likelihood, likelihood_grad, net_state
-
-
-@functools.partial(
-    jax.pmap, axis_name='i', static_broadcasted_argnums=[0, 3, 4],
-    in_axes=(None, None, 0, None, None, 0)
-)
-def pmap_get_log_prob_and_accuracy(
-    net_apply, params, net_state, likelihood_fn, prior_fn, dataset, is_training=False
-):
-  """Computes posterior density value and accuracy via pmap."""
-
-  likelihood, (acc, net_state) = likelihood_fn(
-      net_apply, params, net_state, dataset, is_training)
-  prior = prior_fn(params)
-
-  acc = jax.lax.pmean(acc, axis_name='i')
-  likelihood = jax.lax.psum(likelihood, axis_name='i')
-  prior = jax.lax.pmean(prior, axis_name='i')
-
-  return likelihood + prior, acc, net_state
-
-
-@functools.partial(
-    jax.pmap, axis_name='i', static_broadcasted_argnums=[0, 4, 5],
-    in_axes=(None, None, 0, 0, None, None)
-)
-def pmap_get_softmax_predictions(
-    net_apply, params, net_state, dataset, num_batches, is_training=False
-):
-  """Computes predictions via pmap."""
-
-  batch_size = dataset[0].shape[0] // num_batches
-  dataset = jax.tree_map(
-      lambda x: x.reshape((num_batches, batch_size, *x.shape[1:])), dataset)
-
-  def get_batch_predictions(_, x):
-    y, _ = net_apply(params, net_state, None, x, is_training)
-    batch_predictions = jax.nn.softmax(y)
-    return None, batch_predictions
-
-  _, predictions = jax.lax.scan(get_batch_predictions, None, dataset)
-
-  return predictions

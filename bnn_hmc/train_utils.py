@@ -25,7 +25,7 @@ import functools
 import os
 
 from bnn_hmc import hmc
-from bnn_hmc import nn_loss
+from bnn_hmc import tree_utils
 
 
 LRSchedule = Callable[[jnp.ndarray], jnp.ndarray]
@@ -42,84 +42,123 @@ def make_cosine_lr_schedule(init_lr, total_steps):
 
 
 def make_optimizer(lr_schedule, momentum_decay):
+  """Make SGD optimizer with momentum."""
   # Maximize log-prob instead of minimizing loss
   return optix.chain(optix.trace(decay=momentum_decay, nesterov=False),
                      optix.scale_by_schedule(lr_schedule))
 
 
-def make_log_prob_and_grad_fn(
+def make_perdevice_log_prob_acc_grad_fns(
     net_apply, log_likelihood_fn, log_prior_fn
 ):
-  def log_prob_and_grad_fn(params, net_state, dataset):
-    likelihood, likelihood_grad, net_state = (
-        nn_loss.pmap_get_log_likelihood_and_grad(
-            net_apply, params, net_state, log_likelihood_fn, dataset))
+  """Functions for training and evaluation, should be jax.lax.psum'ed"""
+  def likelihood_prior_and_grads_fn(params, net_state, batch):
+    loss_acc_val_grad = jax.value_and_grad(
+        log_likelihood_fn, has_aux=True, argnums=1)
+    (likelihood, (acc, net_state)), likelihood_grad = loss_acc_val_grad(
+        net_apply, params, net_state, batch, is_training=True)
     prior, prior_grad = jax.value_and_grad(log_prior_fn)(params)
-    log_prob = likelihood[0] + prior
-    grad = jax.tree_multimap(lambda g_l, g_p: g_l[0] + g_p,
-                             likelihood_grad, prior_grad)
-    return log_prob, grad, likelihood[0], prior, net_state
-
-  return log_prob_and_grad_fn
-
-
-def make_log_prob_and_grad_nopmap_fn(
-    net_apply, log_likelihood_fn, log_prior_fn
-):
-  def log_prob_and_grad_fn(params, net_state, batch, total_num_data):
-    loss_acc_val_grad = jax.value_and_grad(log_likelihood_fn, has_aux=True,
-                                           argnums=1)
-    (likelihood, (_, net_state)), likelihood_grad = (
-      loss_acc_val_grad(net_apply, params, net_state, batch, is_training=True)
-    )
-    prior, prior_grad = jax.value_and_grad(log_prior_fn)(params)
-    coefficient = total_num_data / jnp.size(batch[1])
-    log_prob = coefficient * likelihood + prior
-    grad = jax.tree_multimap(lambda g_l, g_p: coefficient * g_l + g_p,
-                             likelihood_grad, prior_grad)
-    return log_prob, grad, likelihood, prior, net_state
-
-  return log_prob_and_grad_fn
-
-
-def make_log_prob_and_acc_fn(
-    net_apply, log_likelihood_fn, log_prior_fn
-):
-  def log_prob_and_acc_fn(params, net_state, dataset):
-    log_prob, acc, _ = nn_loss.pmap_get_log_prob_and_accuracy(
-      net_apply, params, net_state, log_likelihood_fn, log_prior_fn, dataset)
-    return log_prob[0], acc[0]
+    return likelihood, likelihood_grad, prior, prior_grad, acc, net_state
   
-  return log_prob_and_acc_fn
+  def likelihood_prior_and_acc_fn(params, net_state, batch, is_training):
+    likelihood, (acc, net_state) = log_likelihood_fn(
+        net_apply, params, net_state, batch, is_training=is_training)
+    prior = log_prior_fn(params)
+    return likelihood, prior, acc, net_state
+
+  return likelihood_prior_and_grads_fn, likelihood_prior_and_acc_fn
 
 
-def make_hmc_update_eval_fns(
-    log_prob_and_grad_fn, log_prior_diff_fn, target_accept_rate=0.9,
-    step_size_adaptation_speed=0.
+def make_eval_fn(likelihood_prior_and_acc_fn):
+  """Define evaluation function."""
+  @functools.partial(
+    jax.pmap, axis_name='i', in_axes=(None, 0, 0)
+  )
+  def pmap_eval(params, net_state, dataset):
+    likelihood, prior, acc, _ = likelihood_prior_and_acc_fn(
+      params, net_state, dataset, is_training=False)
+    likelihood = jax.lax.psum(likelihood, axis_name='i')
+    log_prob = likelihood + prior
+    acc = jax.lax.pmean(acc, axis_name='i')
+    return log_prob, acc, likelihood, prior
+  
+  def evaluate(params, net_state, dataset):
+    return (arr[0] for arr in pmap_eval(params, net_state, dataset))
+  
+  return evaluate
+
+
+def make_hmc_update(
+    net_apply, log_likelihood_fn, log_prior_fn,
+    log_prior_diff_fn, target_accept_rate=0.9, step_size_adaptation_speed=0.
 ):
   """Make update and ev0al functions for HMC training."""
 
-  hmc_update = hmc.make_adaptive_hmc_update(
-      log_prob_and_grad_fn, log_prior_diff_fn)
+  perdevice_likelihood_prior_and_grads_fn, likelihood_prior_and_acc_fn = (
+      make_perdevice_log_prob_acc_grad_fns(
+          net_apply, log_likelihood_fn, log_prior_fn))
+  
+  def _perdevice_log_prob_and_grad(dataset, params, net_state):
+    # Only call inside pmap
+    likelihood, likelihood_grad, prior, prior_grad, _, net_state = (
+        perdevice_likelihood_prior_and_grads_fn(params, net_state, dataset))
+    likelihood = jax.lax.psum(likelihood, axis_name='i')
+    likelihood_grad = jax.lax.psum(likelihood_grad, axis_name='i')
+    log_prob = likelihood + prior
+    grad = tree_utils.tree_add(likelihood_grad, prior_grad)
+    return log_prob, grad, likelihood, net_state
 
-  def update(
-      params, net_state, log_likelihood, state_grad, key, step_size,
+  hmc_update = hmc.make_adaptive_hmc_update(
+    _perdevice_log_prob_and_grad, log_prior_diff_fn)
+
+  @functools.partial(
+    jax.pmap, axis_name='i', static_broadcasted_argnums=[3, 5, 6, 7, 8],
+    in_axes=(0, None, 0, None, None, None, None, None, None)
+  )
+  def pmap_update(
+      dataset, params, net_state, log_likelihood, state_grad, key, step_size,
       trajectory_len, do_mh_correction
   ):
     (params, net_state, log_likelihood, state_grad, step_size, accept_prob,
-     accepted) = (
-        hmc_update(
-            params, net_state, log_likelihood, state_grad, key, step_size,
-            trajectory_len, target_accept_rate=target_accept_rate,
-            step_size_adaptation_speed=step_size_adaptation_speed,
-            do_mh_correction=do_mh_correction))
+     accepted) = hmc_update(
+        dataset, params, net_state, log_likelihood, state_grad, key, step_size,
+        trajectory_len, target_accept_rate=target_accept_rate,
+        step_size_adaptation_speed=step_size_adaptation_speed,
+        do_mh_correction=do_mh_correction)
     key, = jax.random.split(key, 1)
     return (params, net_state, log_likelihood, state_grad, step_size, key,
             accept_prob, accepted)
+  
+  def update(
+      dataset, params, net_state, log_likelihood, state_grad, key, step_size,
+      trajectory_len, do_mh_correction
+  ):
+    (params, net_state, log_likelihood, state_grad, step_size, key,
+     accept_prob, accepted) = pmap_update(
+        dataset, params, net_state, log_likelihood, state_grad, key, step_size,
+        trajectory_len, do_mh_correction)
+    params, state_grad = map(
+        tree_utils.get_first_elem_in_sharded_tree, [params, state_grad])
+    log_likelihood, step_size, key, accept_prob, accepted = map(
+        lambda arr: arr[0],
+        [log_likelihood, step_size, key, accept_prob, accepted])
+    return (params, net_state, log_likelihood, state_grad, step_size, key,
+            accept_prob, accepted)
+  
+  def get_log_prob_and_grad(params, net_state, dataset):
+    pmap_log_prob_and_grad = (
+        jax.pmap(
+            _perdevice_log_prob_and_grad, axis_name='i', in_axes=(0, None, 0)))
+    log_prob, grad, likelihood, net_state = pmap_log_prob_and_grad(
+        params, net_state, dataset)
+    return (*map(tree_utils.get_first_elem_in_sharded_tree, (log_prob, grad)),
+            likelihood[0], net_state)
 
-  return update, log_prob_and_grad_fn
+  return (update, get_log_prob_and_grad,
+          make_eval_fn(likelihood_prior_and_acc_fn))
 
 
+# TODO: rewrite analogously to HMC
 def make_sgd_train_epoch(loss_grad_fn, optimizer, num_batches):
   """
   Make a training epoch function for SGD-like optimizers.
@@ -155,3 +194,26 @@ def make_sgd_train_epoch(loss_grad_fn, optimizer, num_batches):
     new_key, = jax.random.split(key, 1)
     return losses, params, net_state, opt_state, new_key
   return sgd_train_epoch
+
+
+@functools.partial(
+    jax.pmap, axis_name='i', static_broadcasted_argnums=[0, 4, 5],
+    in_axes=(None, None, 0, 0, None, None)
+)
+def get_softmax_predictions(
+    net_apply, params, net_state, dataset, num_batches=1, is_training=False
+):
+  """Compute predictions for a given network on a given dataset."""
+
+  batch_size = dataset[0].shape[0] // num_batches
+  dataset = jax.tree_map(
+      lambda x: x.reshape((num_batches, batch_size, *x.shape[1:])), dataset)
+
+  def get_batch_predictions(current_net_state, x):
+    y, current_net_state = net_apply(params, current_net_state, None, x, is_training)
+    batch_predictions = jax.nn.softmax(y)
+    return current_net_state, batch_predictions
+
+  _, predictions = jax.lax.scan(get_batch_predictions, net_state, dataset)
+
+  return predictions

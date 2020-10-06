@@ -36,3 +36,7 @@ def tree_dist(a, b):
 
 def tree_scalarmul(a, s):
   return jax.tree_map(lambda e: e*s, a)
+
+
+def get_first_elem_in_sharded_tree(tree):
+  return jax.tree_map(lambda p: p[0], tree)

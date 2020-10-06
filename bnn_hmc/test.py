@@ -175,6 +175,7 @@ class TestHMC(unittest.TestCase):
         ((accept_prob_reverse > 1e-4) and (accept_prob_reverse < 1. - 1e-4)))
     assert accept_prob_not_1_or_0
 
+# TODO: test that log_prob evaluation doesn't depend on number of devices
 
 if __name__ == '__main__':
   unittest.main()

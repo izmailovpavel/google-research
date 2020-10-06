@@ -20,31 +20,45 @@ import jax
 import jax.numpy as jnp
 import tqdm
 
+from bnn_hmc import tree_utils
+
 
 def make_leapfrog(log_prob_and_grad):
   """Leapfrog method."""
 
   # Return likelihood and prior separately in log_prob_and_grad to compute the
   # prior densities ratio more accurately in float32 in the accept-reject step.
-  def _leapfrog_body(step_size, params, net_state, momentum, state_grad):
-    momentum = jax.tree_multimap(lambda m, g: m + 0.5 * step_size * g, momentum,
-                                 state_grad)
-    params = jax.tree_multimap(lambda s, m: s + m * step_size, params, momentum)
-    state_log_prob, state_grad, log_likelihood, _, net_state = (
-        log_prob_and_grad(params, net_state))
-    momentum = jax.tree_multimap(lambda m, g: m + 0.5 * step_size * g, momentum,
-                                 state_grad)
-
-    return (params, net_state, momentum, state_grad, state_log_prob,
-            log_likelihood)
-
-  def leapfrog(step_size, n_leapfrog, params, net_state, momentum, state_grad):
+  
+  def leapfrog(
+      dataset, init_params, init_net_state, init_momentum, init_grad, step_size,
+      n_leapfrog
+  ):
+    def _leapfrog_body(_, carry):
+      params, net_state, momentum, grad, _, _ = carry
+      momentum = jax.tree_multimap(
+        lambda m, g: m + 0.5 * step_size * g, momentum, grad)
+      params = jax.tree_multimap(lambda s, m: s + m * step_size, params,
+                                 momentum)
+      log_prob, grad, log_likelihood, net_state = log_prob_and_grad(
+        dataset, params, net_state)
+      momentum = jax.tree_multimap(
+        lambda m, g: m + 0.5 * step_size * g, momentum, grad)
+      return params, net_state, momentum, grad, log_prob, log_likelihood
+    
+    # TODO: go back to lax.fori_loop
     # Do not use `lax.fori_loop` to avoid jit-of-pmap.
-    for _ in tqdm.tqdm(range(n_leapfrog)):
-      (params, net_state, momentum, state_grad, state_log_prob,
-       state_likelihood) = (
-          _leapfrog_body(step_size, params, net_state, momentum, state_grad))
-    return params, net_state, momentum, state_grad, state_likelihood
+    # for _ in tqdm.tqdm(range(n_leapfrog)):
+    #   params, net_state, momentum, grad, log_prob, log_likelihood = (
+    #       _leapfrog_body)
+    # return params, net_state, momentum, grad, log_likelihood
+    
+    init_vals = (
+        init_params, init_net_state, init_momentum, init_grad, 0., 0.)
+    (new_params, new_net_state, new_momentum, new_grad, new_log_prob,
+     new_log_likelihood) = jax.lax.fori_loop(
+        0, n_leapfrog, _leapfrog_body, init_vals)
+    return (
+      new_params, new_net_state, new_momentum, new_grad, new_log_likelihood)
 
   return leapfrog
 
@@ -88,12 +102,33 @@ def make_accept_prob(log_prior_diff_fn):
   return get_accept_prob
 
 
+def adapt_step_size(
+    step_size, target_accept_rate, accept_prob, step_size_adaptation_speed
+):
+  log_factor = jnp.where(
+      jnp.logical_or(target_accept_rate <= 0, step_size_adaptation_speed <= 0),
+      0., step_size_adaptation_speed * (accept_prob - target_accept_rate))
+  return step_size * jnp.exp(log_factor)
+
+
+# def jitter_stepsize(
+#     step_size, target_accept_rate, step_size_adaptation_speed, jitter_key,
+#     jitter_amt
+# ):
+#   log_factor = jnp.where(
+#       jnp.logical_or(step_size_adaptation_speed <= 0, target_accept_rate <= 0),
+#       jnp.log(1. + jitter_amt) * (2 * jax.random.uniform(jitter_key, ()) - 1.),
+#       0.)
+#   return step_size * jnp.exp(log_factor)
+
+
 def make_adaptive_hmc_update(log_prob_and_grad_fn, log_prior_diff_fn):
   """Returns an adaptive HMC update function."""
   leapfrog = make_leapfrog(log_prob_and_grad_fn)
   get_accept_prob = make_accept_prob(log_prior_diff_fn)
 
   def adaptive_hmc_update(
+      dataset,
       params,
       net_state,
       log_likelihood,
@@ -112,30 +147,25 @@ def make_adaptive_hmc_update(log_prob_and_grad_fn, log_prior_diff_fn):
 
     n_leapfrog = jnp.array(jnp.ceil(trajectory_len / step_size), jnp.int32)
     n_leapfrog = jnp.minimum(n_leapfrog, max_n_leapfrog)
-    jittered_step_size = step_size * jnp.exp(
-        jnp.where(
-            jnp.logical_or(step_size_adaptation_speed <= 0,
-                           target_accept_rate <= 0),
-            jnp.log(1. + jitter_amt) * (2 * jax.random.uniform(jitter_key,
-                                                               ()) - 1.), 0.))
+    # TODO: why do we need to jitter the step size?
+    # jittered_step_size = jitter_stepsize(
+    #     step_size, target_accept_rate, step_size_adaptation_speed, jitter_key,
+    #     jitter_amt)
 
     momentum = sample_momentum(params, normal_key)
 
     new_params, net_state, new_momentum, new_grad, new_log_likelihood = (
-        leapfrog(jittered_step_size, n_leapfrog, params, net_state, momentum,
-                 state_grad))
+        leapfrog(dataset, params, net_state, momentum, state_grad,
+                 step_size, n_leapfrog))
     accept_prob = get_accept_prob(
         log_likelihood, params, momentum,
         new_log_likelihood, new_params, new_momentum)
-    accepted = (
-        jax.random.uniform(uniform_key, log_likelihood.shape) < accept_prob)
+    # accepted = (
+    #     jax.random.uniform(uniform_key, log_likelihood.shape) < accept_prob)
+    accepted = jax.random.uniform(uniform_key) < accept_prob
 
-    step_size = step_size * jnp.exp(
-        jnp.where(
-            jnp.logical_or(target_accept_rate <= 0,
-                           step_size_adaptation_speed <= 0), 0.,
-            step_size_adaptation_speed *
-            (jnp.mean(accept_prob) - target_accept_rate)))
+    step_size = adapt_step_size(
+        step_size, target_accept_rate, accept_prob, step_size_adaptation_speed)
     
     if do_mh_correction:
       params = jax.lax.cond(accepted, _first, _second, (new_params, params))
