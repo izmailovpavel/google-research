@@ -65,8 +65,6 @@ def load_imdb_dataset():
     x = sequence.pad_sequences(x, maxlen=max_length)
     y = onp.array(y)
     x = onp.array(x)
-    # x = tf.convert_to_tensor(x, dtype=tf.int32)
-    # y = tf.convert_to_tensor(y, dtype=tf.int32)
     return x, y
 
   max_length = _IMDB_CONFIG["max_len"]

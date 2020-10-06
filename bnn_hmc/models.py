@@ -123,10 +123,41 @@ def make_resnet20_fn(num_classes):
   return make_resnet_fn(num_classes, depth=20)
 
 
+def make_cnn_lstm(num_classes,
+                  max_features=20000,
+                  embedding_size=128,
+                  cell_size=128,
+                  num_filters=64,
+                  kernel_size=5,
+                  pool_size=4):
+  """CNN LSTM architecture for the IMDB dataset."""
+  def forward(batch, is_training):
+    x, _ = batch
+    batch_size = x.shape[0]
+    x = hk.Embed(vocab_size=max_features, embed_dim=embedding_size)(x)
+    x = hk.Conv1D(output_channels=num_filters, kernel_shape=kernel_size,
+                  padding="VALID")(x)
+    x = jax.nn.relu(x)
+    x = hk.MaxPool(
+        window_shape=pool_size, strides=pool_size, padding='VALID',
+        channel_axis=1)(x)
+    x = jnp.moveaxis(x, 1, 0)[:, :] #[T, B, F]
+    lstm_layer = hk.LSTM(hidden_size=cell_size)
+    init_state = lstm_layer.initial_state(batch_size)
+    # TODO: choose static vs dynamic unroll?
+    x, state = hk.static_unroll(lstm_layer, x, init_state)
+    x = x[-1]
+    logits = hk.Linear(num_classes)(x)
+    return logits
+  
+  return forward
+
+  
 def get_model(model_name, num_classes):
   _MODEL_FNS = {
     "lenet": make_lenet_fn,
     "resnet20": make_resnet20_fn,
+    "cnn_lstm": make_cnn_lstm
   }
   net_fn = _MODEL_FNS[model_name](num_classes)
   net = hk.transform_with_state(net_fn)
