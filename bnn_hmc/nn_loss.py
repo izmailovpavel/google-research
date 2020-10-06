@@ -29,16 +29,17 @@ from bnn_hmc import tree_utils
 # PriorFn = Callable[[hk.Params], jnp.array]
 # LikelihoodFn = Callable[[hk.Transformed, hk.Params, Batch], LossAcc]
 
-
-def xent_log_likelihood(net_apply, params, net_state, batch, is_training):
-  """Computes the negative log-likelihood."""
-  _, y = batch
-  logits, net_state = net_apply(params, net_state, None, batch, is_training)
-  labels = jax.nn.one_hot(y, 10)
-  softmax_xent = jnp.sum(labels * jax.nn.log_softmax(logits))
-
-  accuracy = jnp.mean(jnp.argmax(logits, axis=-1) == y)
-  return softmax_xent, (accuracy, net_state)
+def make_xent_log_likelihood(num_classes):
+  def xent_log_likelihood(net_apply, params, net_state, batch, is_training):
+    """Computes the negative log-likelihood."""
+    _, y = batch
+    logits, net_state = net_apply(params, net_state, None, batch, is_training)
+    labels = jax.nn.one_hot(y, num_classes)
+    softmax_xent = jnp.sum(labels * jax.nn.log_softmax(logits))
+  
+    accuracy = jnp.mean(jnp.argmax(logits, axis=-1) == y)
+    return softmax_xent, (accuracy, net_state)
+  return xent_log_likelihood
 
 
 def make_gaussian_log_prior(weight_decay):

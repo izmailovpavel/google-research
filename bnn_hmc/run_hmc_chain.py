@@ -168,9 +168,9 @@ def train_model():
     tabulate_dict["iteration"] = iteration
     tabulate_dict["step_size"] = step_size
     tabulate_dict["train_logprob"] = log_prob
-    tabulate_dict["test_ce"] = test_ce
     tabulate_dict["train_acc"] = train_acc
     tabulate_dict["test_acc"] = test_acc
+    tabulate_dict["test_ce"] = test_ce
     tabulate_dict["accept_prob"] = accept_prob
     tabulate_dict["accepted"] = accepted
     tabulate_dict["ensemble_acc"] = ensemble_acc

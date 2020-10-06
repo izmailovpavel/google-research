@@ -58,22 +58,17 @@ def train_model():
     args.seed)
   dirname = os.path.join(args.dir, subdirname)
   os.makedirs(dirname, exist_ok=True)
-  cmd_args_utils.save_cmd(dirname)
   tf_writer = tf.summary.create_file_writer(dirname)
+  cmd_args_utils.save_cmd(dirname, tf_writer)
   
   train_set, test_set, num_classes = data.make_ds_pmap_fullbatch(
     name=args.dataset_name)
   
   net_apply, net_init = models.get_model(args.model_name, num_classes)
   
-  log_likelihood_fn = nn_loss.xent_log_likelihood
+  log_likelihood_fn = nn_loss.make_xent_log_likelihood(num_classes)
   log_prior_fn, _ = (
     nn_loss.make_gaussian_log_prior(weight_decay=args.weight_decay))
-
-  loss_grad_fn = train_utils.make_log_prob_and_grad_nopmap_fn(
-      net_apply, log_likelihood_fn, log_prior_fn)
-  eval_fn = train_utils.make_log_prob_and_acc_fn(
-      net_apply, log_likelihood_fn, log_prior_fn)
 
   num_data = jnp.size(train_set[1])
   num_batches = num_data // args.batch_size
@@ -103,19 +98,15 @@ def train_model():
     elif status == checkpoint_utils.InitStatus.LOADED_PREEMPTED:
       print("Continuing the run from the last saved checkpoint")
 
-  sgd_train_epoch = train_utils.make_sgd_train_epoch(
-      loss_grad_fn, optimizer, num_batches)
+  sgd_train_epoch, evaluate = train_utils.make_sgd_train_epoch(
+    net_apply, log_likelihood_fn, log_prior_fn, optimizer, num_batches)
   
   for iteration in range(start_iteration, args.num_epochs):
     
     start_time = time.time()
-    logprobs, params, net_state, opt_state, key = sgd_train_epoch(
+    params, net_state, opt_state, logprob_avg, key = sgd_train_epoch(
         params, net_state, opt_state, train_set, key)
-    params = jax.tree_map(lambda p: p[0], params)
-    opt_state = jax.tree_map(lambda p: p[0], opt_state)
     iteration_time = time.time() - start_time
-    
-    logprob_avg = jnp.mean(logprobs)
 
     tabulate_dict = OrderedDict()
     tabulate_dict["iteration"] = iteration
@@ -139,17 +130,22 @@ def train_model():
           iteration, params, net_state, opt_state, key)
       checkpoint_utils.save_checkpoint(checkpoint_path, checkpoint_dict)
     
-    if iteration % args.eval_freq == 0:
-      test_log_prob, test_acc = eval_fn(params, net_state, test_set)
-      train_log_prob, train_acc = eval_fn(params, net_state, train_set)
+    if (iteration % args.eval_freq == 0) or (iteration == args.num_epochs - 1):
+      test_log_prob, test_acc, test_ce, _ = evaluate(params, net_state,
+                                                     test_set)
+      train_log_prob, train_acc, train_ce, prior = (
+        evaluate(params, net_state, train_set))
       
       tabulate_dict["train_logprob"] = train_log_prob
       tabulate_dict["test_logprob"] = test_log_prob
       tabulate_dict["train_acc"] = train_acc
       tabulate_dict["test_acc"] = test_acc
+      
       with tf_writer.as_default():
         tf.summary.scalar("train/log_prob", train_log_prob, step=iteration)
         tf.summary.scalar("test/log_prob", test_log_prob, step=iteration)
+        tf.summary.scalar("train/log_likelihood", train_ce, step=iteration)
+        tf.summary.scalar("test/log_likelihood", test_ce, step=iteration)
         tf.summary.scalar("train/accuracy", train_acc, step=iteration)
         tf.summary.scalar("test/accuracy", test_acc, step=iteration)
     

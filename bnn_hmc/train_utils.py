@@ -159,16 +159,33 @@ def make_hmc_update(
 
 
 # TODO: rewrite analogously to HMC
-def make_sgd_train_epoch(loss_grad_fn, optimizer, num_batches):
+def make_sgd_train_epoch(
+    net_apply, log_likelihood_fn, log_prior_fn, optimizer, num_batches
+):
   """
   Make a training epoch function for SGD-like optimizers.
   """
+  perdevice_likelihood_prior_and_grads_fn, likelihood_prior_and_acc_fn = (
+    make_perdevice_log_prob_acc_grad_fns(
+      net_apply, log_likelihood_fn, log_prior_fn))
+  
+  def _perdevice_log_prob_and_grad(dataset, params, net_state):
+    # Only call inside pmap
+    likelihood, likelihood_grad, prior, prior_grad, _, net_state = (
+        perdevice_likelihood_prior_and_grads_fn(params, net_state, dataset))
+    likelihood = jax.lax.psum(likelihood, axis_name='i')
+    likelihood_grad = jax.lax.psum(likelihood_grad, axis_name='i')
+    
+    log_prob = likelihood * num_batches + prior
+    grad = jax.tree_multimap(
+      lambda gl, gp: gl * num_batches + gp, likelihood_grad, prior_grad)
+    return log_prob, grad, net_state
   
   @functools.partial(
     jax.pmap, axis_name='i', static_broadcasted_argnums=[],
     in_axes=(None, 0, None, 0, 0)
   )
-  def sgd_train_epoch(params, net_state, opt_state, train_set, key):
+  def pmap_sgd_train_epoch(params, net_state, opt_state, train_set, key):
     n_data = train_set[0].shape[0]
     batch_size = n_data // num_batches
     indices = jax.random.permutation(key, jnp.arange(n_data))
@@ -180,8 +197,8 @@ def make_sgd_train_epoch(loss_grad_fn, optimizer, num_batches):
     def train_step(carry, batch_indices):
       batch = jax.tree_map(lambda x: x[batch_indices], train_set)
       params_, net_state_, opt_state_ = carry
-      loss, grad, _, _, net_state_ = loss_grad_fn(
-        params_, net_state_, batch, total_num_data)
+      loss, grad, net_state_ = _perdevice_log_prob_and_grad(
+        batch, params_, net_state_)
       grad = jax.lax.psum(grad, axis_name='i')
       
       updates, opt_state_ = optimizer.update(grad, opt_state_)
@@ -193,7 +210,17 @@ def make_sgd_train_epoch(loss_grad_fn, optimizer, num_batches):
     
     new_key, = jax.random.split(key, 1)
     return losses, params, net_state, opt_state, new_key
-  return sgd_train_epoch
+
+  def sgd_train_epoch(params, net_state, opt_state, train_set, key):
+    losses, params, net_state, opt_state, new_key = (
+      pmap_sgd_train_epoch(params, net_state, opt_state, train_set, key)
+    )
+    params, opt_state = map(
+      tree_utils.get_first_elem_in_sharded_tree, [params, opt_state])
+    loss_avg = jnp.mean(losses)
+    return params, net_state, opt_state, loss_avg, new_key
+  
+  return sgd_train_epoch, make_eval_fn(likelihood_prior_and_acc_fn)
 
 
 @functools.partial(
