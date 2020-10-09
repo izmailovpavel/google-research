@@ -109,7 +109,7 @@ def train_model():
       raise ValueError("Unknown initialization status: {}".format(status))
   trajectory_len = args.trajectory_len
 
-  log_likelihood_fn = nn_loss.xent_log_likelihood
+  log_likelihood_fn = nn_loss.make_xent_log_likelihood(num_classes)
   log_prior_fn, log_prior_diff_fn = (
     nn_loss.make_gaussian_log_prior(weight_decay=args.weight_decay))
 

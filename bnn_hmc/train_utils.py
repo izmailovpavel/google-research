@@ -191,8 +191,6 @@ def make_sgd_train_epoch(
     indices = jax.random.permutation(key, jnp.arange(n_data))
     indices = jax.tree_map(
         lambda x: x.reshape((num_batches, batch_size)), indices)
-
-    total_num_data = jax.lax.psum(jnp.size(train_set[1]), axis_name='i')
     
     def train_step(carry, batch_indices):
       batch = jax.tree_map(lambda x: x[batch_indices], train_set)
@@ -237,7 +235,8 @@ def get_softmax_predictions(
       lambda x: x.reshape((num_batches, batch_size, *x.shape[1:])), dataset)
 
   def get_batch_predictions(current_net_state, x):
-    y, current_net_state = net_apply(params, current_net_state, None, x, is_training)
+    y, current_net_state = net_apply(
+        params, current_net_state, None, x, is_training)
     batch_predictions = jax.nn.softmax(y)
     return current_net_state, batch_predictions
 

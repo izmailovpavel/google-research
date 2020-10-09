@@ -152,12 +152,24 @@ def make_cnn_lstm(num_classes,
   
   return forward
 
+
+def make_mlp_regression(layer_dims=[100, 100], output_dim=1):
+  def forward(batch, is_training):
+    x, _ = batch
+    for layer_dim in layer_dims:
+      x = hk.Linear(layer_dim)(x)
+      x = jax.nn.relu(x)
+    x = hk.Linear(output_dim)(x)
+    return x
+  return forward
+  
   
 def get_model(model_name, num_classes):
   _MODEL_FNS = {
     "lenet": make_lenet_fn,
     "resnet20": make_resnet20_fn,
-    "cnn_lstm": make_cnn_lstm
+    "cnn_lstm": make_cnn_lstm,
+    "mlp": make_mlp_regression
   }
   net_fn = _MODEL_FNS[model_name](num_classes)
   net = hk.transform_with_state(net_fn)

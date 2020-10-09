@@ -111,17 +111,6 @@ def adapt_step_size(
   return step_size * jnp.exp(log_factor)
 
 
-# def jitter_stepsize(
-#     step_size, target_accept_rate, step_size_adaptation_speed, jitter_key,
-#     jitter_amt
-# ):
-#   log_factor = jnp.where(
-#       jnp.logical_or(step_size_adaptation_speed <= 0, target_accept_rate <= 0),
-#       jnp.log(1. + jitter_amt) * (2 * jax.random.uniform(jitter_key, ()) - 1.),
-#       0.)
-#   return step_size * jnp.exp(log_factor)
-
-
 def make_adaptive_hmc_update(log_prob_and_grad_fn, log_prior_diff_fn):
   """Returns an adaptive HMC update function."""
   leapfrog = make_leapfrog(log_prob_and_grad_fn)

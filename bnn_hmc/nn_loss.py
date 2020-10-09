@@ -58,3 +58,24 @@ def make_gaussian_log_prior(weight_decay):
 
   return log_prior, log_prior_diff
 
+
+def make_gaussian_likelihood(noise_std=None):
+  def gaussian_log_likelihood(net_apply, params, net_state, batch, is_training):
+    """Computes the negative log-likelihood."""
+    _, y = batch
+    predictions, net_state = net_apply(
+        params, net_state, None, batch, is_training)
+    
+    if noise_std is None:
+      predictions, predictions_std = jnp.split(predictions, [1], axis=-1)
+    else:
+      predictions_std = noise_std
+      
+    mse = (predictions - y)**2
+    mse /= predictions_std**2
+    log_likelihood = -jnp.sum(mse)
+    
+    statistics = jnp.mean(mse)
+    
+    return log_likelihood, (statistics, net_state)
+  return gaussian_log_likelihood
