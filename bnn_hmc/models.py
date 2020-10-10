@@ -20,6 +20,7 @@ import haiku as hk
 import jax
 import jax.numpy as jnp
 from jax.experimental.callback import rewrite
+from typing import Callable
 
 from bnn_hmc import precision_utils
 
@@ -62,20 +63,33 @@ def make_lenet_fn(num_classes):
 he_normal = hk.initializers.VarianceScaling(2.0, 'fan_in', 'truncated_normal')
 
 
+class FeatureResponseNorm(hk.Module):
+  def __init__(self, eps=1e-6, name='frn'):
+    super().__init__(name=name)
+    self.eps = eps
+  
+  def __call__(self, x, **unused_kwargs):
+    del unused_kwargs
+    par_shape = (1, 1, 1, x.shape[-1])  # [1,1,1,C]
+    tau = hk.get_parameter('tau', par_shape, x.dtype, init=jnp.zeros)
+    beta = hk.get_parameter('beta', par_shape, x.dtype, init=jnp.zeros)
+    gamma = hk.get_parameter('gamma', par_shape, x.dtype, init=jnp.ones)
+    nu2 = jnp.mean(jnp.square(x), axis=[1, 2], keepdims=True)
+    x = x * jax.lax.rsqrt(nu2 + self.eps)
+    y = gamma * x + beta
+    z = jnp.maximum(y, tau)
+    return z
+  
+
 def _resnet_layer(
-    inputs, num_filters, kernel_size=3, strides=1, activation=lambda x: x,
-    use_bias=True, is_training=True, bn_config=_DEFAULT_BN_CONFIG
+    inputs, num_filters, normalization_layer, kernel_size=3, strides=1,
+    activation=lambda x: x, use_bias=True, is_training=True
 ):
   x = inputs
   x = hk.Conv2D(
-      num_filters,
-      kernel_size,
-      stride=strides,
-      padding='same',
-      w_init=he_normal,
-      with_bias=use_bias)(
-          x)
-  x = hk.BatchNorm(**bn_config)(x, is_training=is_training)
+      num_filters, kernel_size, stride=strides, padding='same',
+      w_init=he_normal, with_bias=use_bias)(x)
+  x = normalization_layer()(x, is_training=is_training)
   x = activation(x)
   return x
 
@@ -83,6 +97,7 @@ def _resnet_layer(
 def make_resnet_fn(
     num_classes: int,
     depth: int,
+    normalization_layer,
     width: int = 16,
     use_bias: bool = True,
 ):
@@ -95,7 +110,9 @@ def make_resnet_fn(
     x, _ = batch
     x = x.astype(jnp.float32)
     x = _resnet_layer(
-        x, num_filters=num_filters, activation=jax.nn.relu, use_bias=use_bias)
+        x, num_filters=num_filters, activation=jax.nn.relu, use_bias=use_bias,
+        normalization_layer=normalization_layer
+    )
     for stack in range(3):
       for res_block in range(num_res_blocks):
         strides = 1
@@ -103,16 +120,20 @@ def make_resnet_fn(
           strides = 2  # downsample
         y = _resnet_layer(
             x, num_filters=num_filters, strides=strides, activation=jax.nn.relu,
-            use_bias=use_bias, is_training=is_training)
-        y = _resnet_layer(y, num_filters=num_filters, use_bias=use_bias)
+            use_bias=use_bias, is_training=is_training,
+            normalization_layer=normalization_layer)
+        y = _resnet_layer(
+            y, num_filters=num_filters, use_bias=use_bias,
+            is_training=is_training, normalization_layer=normalization_layer)
         if stack > 0 and res_block == 0:  # first layer but not first stack
           # linear projection residual shortcut connection to match changed dims
           x = _resnet_layer(
               x, num_filters=num_filters, kernel_size=1, strides=strides,
-              use_bias=use_bias)
+              use_bias=use_bias, is_training=is_training,
+              normalization_layer=normalization_layer)
         x = jax.nn.relu(x + y)
       num_filters *= 2
-    x = hk.AvgPool(8, 8, 'VALID')(x)
+    x = hk.AvgPool((8, 8, 1), 8, 'VALID')(x)
     x = hk.Flatten()(x)
     logits = hk.Linear(num_classes, w_init=he_normal)(x)
     return logits
@@ -120,7 +141,14 @@ def make_resnet_fn(
 
 
 def make_resnet20_fn(num_classes):
-  return make_resnet_fn(num_classes, depth=20)
+  def normalization_layer(): hk.BatchNorm(**_DEFAULT_BN_CONFIG)
+  return make_resnet_fn(num_classes, depth=20,
+                        normalization_layer=normalization_layer)
+
+
+def make_resnet20_frn_fn(num_classes):
+  return make_resnet_fn(num_classes, depth=20,
+                        normalization_layer=FeatureResponseNorm)
 
 
 def make_cnn_lstm(num_classes,
@@ -168,6 +196,7 @@ def get_model(model_name, num_classes):
   _MODEL_FNS = {
     "lenet": make_lenet_fn,
     "resnet20": make_resnet20_fn,
+    "resnet20_frn": make_resnet20_frn_fn,
     "cnn_lstm": make_cnn_lstm,
     "mlp": make_mlp_regression
   }
