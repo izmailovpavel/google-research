@@ -44,7 +44,7 @@ def save_cmd(dirname, tf_writer):
   with open(os.path.join(dirname, "command.sh"), "w") as f:
     f.write(command)
     f.write("\n")
-
-  with tf_writer.as_default():
-    tf.summary.text("command", command, step=0,
-                    description="Command line arguments")
+  if tf_writer is not None:
+    with tf_writer.as_default():
+      tf.summary.text("command", command, step=0,
+                      description="Command line arguments")

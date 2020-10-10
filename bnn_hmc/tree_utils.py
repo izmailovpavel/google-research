@@ -23,6 +23,10 @@ def tree_add(a, b):
   return jax.tree_multimap(lambda e1, e2: e1+e2, a, b)
 
 
+def tree_diff(a, b):
+  return jax.tree_multimap(lambda p_a, p_b: p_a - p_b, a, b)
+
+
 def tree_dot(a, b):
   return sum([jnp.sum(e1 * e2) for e1, e2 in
               zip(jax.tree_leaves(a), jax.tree_leaves(b))])
@@ -40,3 +44,7 @@ def tree_scalarmul(a, s):
 
 def get_first_elem_in_sharded_tree(tree):
   return jax.tree_map(lambda p: p[0], tree)
+
+
+def tree_norm(a):
+  return float(jnp.sqrt(sum([jnp.sum(p_a ** 2) for p_a in jax.tree_leaves(a)])))
