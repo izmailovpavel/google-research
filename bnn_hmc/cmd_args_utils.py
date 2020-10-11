@@ -21,7 +21,7 @@ import tensorflow.compat.v2 as tf
 
 
 def add_common_flags(parser):
-  parser.add_argument("--tpu_ip", type=str, default="10.0.0.2",
+  parser.add_argument("--tpu_ip", type=str, default=None,
                       help="Cloud TPU internal ip "
                            "(see `gcloud compute tpus list`)")
   parser.add_argument("--seed", type=int, default=0, help="Random seed")

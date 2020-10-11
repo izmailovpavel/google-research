@@ -57,9 +57,7 @@ parser.add_argument("--no_mh", default=False, action='store_true',
                     help="If set, Metropolis Hastings correction is ignored")
 
 args = parser.parse_args()
-
-config.FLAGS.jax_xla_backend = "tpu_driver"
-config.FLAGS.jax_backend_target = "grpc://{}:8470".format(args.tpu_ip)
+train_utils.set_up_jax(args.tpu_ip)
 
 
 def train_model():

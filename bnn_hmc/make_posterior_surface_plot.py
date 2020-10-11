@@ -58,11 +58,9 @@ parser.add_argument("--checkpoint2", type=str, required=True,
                     help="Path to the second checkpoint")
 parser.add_argument("--checkpoint3", type=str, required=True,
                     help="Path to the third checkpoint")
+
 args = parser.parse_args()
-
-
-config.FLAGS.jax_xla_backend = "tpu_driver"
-config.FLAGS.jax_backend_target = "grpc://{}:8470".format(args.tpu_ip)
+train_utils.set_up_jax(args.tpu_ip)
 
 
 def get_u_v_o(params1, params2, params3):

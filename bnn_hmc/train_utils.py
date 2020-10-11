@@ -22,7 +22,7 @@ from jax.experimental import optix
 import jax.numpy as jnp
 import numpy as onp
 import functools
-import os
+from jax.config import config
 
 from bnn_hmc import hmc
 from bnn_hmc import tree_utils
@@ -31,6 +31,12 @@ from bnn_hmc import tree_utils
 LRSchedule = Callable[[jnp.ndarray], jnp.ndarray]
 Opt = optix.GradientTransformation
 _CHECKPOINT_FORMAT_STRING = "model_step_{}.pt"
+
+
+def set_up_jax(tpu_ip):
+  if tpu_ip is not None:
+    config.FLAGS.jax_xla_backend = "tpu_driver"
+    config.FLAGS.jax_backend_target = "grpc://{}:8470".format(tpu_ip)
 
 
 def make_cosine_lr_schedule(init_lr, total_steps):

@@ -16,7 +16,6 @@
 """Run SGD training on a cloud TPU. We are not using data augmentation."""
 
 import os
-from jax.config import config
 from jax import numpy as jnp
 import jax
 import tensorflow.compat.v2 as tf
@@ -46,11 +45,9 @@ parser.add_argument("--eval_freq", type=int, default=10,
                     help="Frequency of evaluation (epochs)")
 parser.add_argument("--save_freq", type=int, default=50,
                     help="Frequency of checkpointing (epochs)")
+
 args = parser.parse_args()
-
-config.FLAGS.jax_xla_backend = "tpu_driver"
-config.FLAGS.jax_backend_target = "grpc://{}:8470".format(args.tpu_ip)
-
+train_utils.set_up_jax(args.tpu_ip)
 
 def train_model():
   subdirname = "sgd_wd_{}_stepsize_{}_batchsize_{}_momentum_{}_seed_{}".format(
