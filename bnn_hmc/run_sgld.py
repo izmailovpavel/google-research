@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Run SGD training on a cloud TPU. We are not using data augmentation."""
+"""Run an SGLD chain on a cloud TPU. We are not using data augmentation."""
 
 import os
 from jax import numpy as jnp
@@ -30,20 +30,24 @@ from bnn_hmc import train_utils
 from bnn_hmc import checkpoint_utils
 from bnn_hmc import cmd_args_utils
 from bnn_hmc import tabulate_utils
-
+from bnn_hmc import sgmcmc
 
 parser = argparse.ArgumentParser(description="Run SGD on a cloud TPU")
 cmd_args_utils.add_common_flags(parser)
-parser.add_argument("--init_step_size", type=float, default=1.e-6,
+parser.add_argument("--init_step_size", type=float, default=1.e-7,
                     help="Initial SGD step size")
-parser.add_argument("--num_epochs", type=int, default=300,
+parser.add_argument("--final_step_size", type=float, default=5.e-7,
+                    help="Initial SGD step size")
+parser.add_argument("--num_epochs", type=int, default=1000,
+                    help="Total number of SGD epochs iterations")
+parser.add_argument("--num_burnin_epochs", type=int, default=300,
                     help="Total number of SGD epochs iterations")
 parser.add_argument("--batch_size", type=int, default=80, help="Batch size")
-parser.add_argument("--momentum_decay", type=float, default=0.9,
-                    help="Momentum decay parameter for SGD")
 parser.add_argument("--eval_freq", type=int, default=10,
                     help="Frequency of evaluation (epochs)")
 parser.add_argument("--save_freq", type=int, default=50,
+                    help="Frequency of checkpointing (epochs)")
+parser.add_argument("--ensemble_freq", type=int, default=10,
                     help="Frequency of checkpointing (epochs)")
 
 args = parser.parse_args()
@@ -51,9 +55,10 @@ train_utils.set_up_jax(args.tpu_ip)
 
 
 def train_model():
-  subdirname = "sgd_wd_{}_stepsize_{}_batchsize_{}_momentum_{}_seed_{}".format(
-    args.weight_decay, args.init_step_size, args.batch_size, args.momentum_decay,
-    args.seed)
+  subdirname = (
+    "sgld_wd_{}_stepsizes_{}_{}_batchsize_{}_epochs{}_{}_seed_{}".format(
+    args.weight_decay, args.init_step_size, args.final_step_size,
+    args.batch_size, args.seed, args.num_epochs, args.num_burnin_epochs))
   dirname = os.path.join(args.dir, subdirname)
   os.makedirs(dirname, exist_ok=True)
   tf_writer = tf.summary.create_file_writer(dirname)
@@ -67,67 +72,81 @@ def train_model():
   log_likelihood_fn = nn_loss.make_xent_log_likelihood(num_classes)
   log_prior_fn, _ = (
     nn_loss.make_gaussian_log_prior(weight_decay=args.weight_decay))
-
+  
   num_data = jnp.size(train_set[1])
   num_batches = num_data // args.batch_size
   num_devices = len(jax.devices())
-
-  total_steps = num_batches * args.num_epochs
-  lr_schedule = train_utils.make_cosine_lr_schedule(
-      args.init_step_size, total_steps)
-  optimizer = train_utils.make_optimizer(
-      lr_schedule, momentum_decay=args.momentum_decay)
+  
+  burnin_steps = num_batches * args.num_burnin_epochs
+  lr_schedule = train_utils.make_cosine_lr_schedule_with_burnin(
+      args.init_step_size, args.final_step_size, burnin_steps
+  )
+  optimizer = sgmcmc.sgld_gradient_update(lr_schedule, args.seed)
   
   checkpoint_dict, status = checkpoint_utils.initialize(
-      dirname, args.init_checkpoint)
-  if status == checkpoint_utils.InitStatus.INIT_RANDOM:
-    key, net_init_key = jax.random.split(jax.random.PRNGKey(args.seed), 2)
-    print("Starting from random initialization with provided seed")
-    init_data = jax.tree_map(lambda elem: elem[0][:1], train_set)
-    params, net_state = net_init(net_init_key, init_data, True)
-    opt_state = optimizer.init(params)
-    net_state = jax.pmap(lambda _: net_state)(jnp.arange(num_devices))
-    key = jax.random.split(key, num_devices)
-    start_iteration = 0
+    dirname, args.init_checkpoint)
+
+  if status == checkpoint_utils.InitStatus.LOADED_PREEMPTED:
+    print("Continuing the run from the last saved checkpoint")
+    (start_iteration, params, net_state, opt_state, key, num_ensembled,
+     ensemble_predicted_probs) = (
+      checkpoint_utils.parse_sgmcmc_checkpoint_dict(checkpoint_dict))
+    
   else:
-    start_iteration, params, net_state, opt_state, key = (
-        checkpoint_utils.parse_sgd_checkpoint_dict(checkpoint_dict))
+    key, net_init_key = jax.random.split(jax.random.PRNGKey(args.seed), 2)
+    start_iteration = 0
+    num_ensembled = 0
+    ensemble_predicted_probs = None
+    key = jax.random.split(key, num_devices)
+  
     if status == checkpoint_utils.InitStatus.INIT_CKPT:
       print("Resuming the run from the provided init_checkpoint")
-      # TODO: fix -- we should only load the parameters in this case
-    elif status == checkpoint_utils.InitStatus.LOADED_PREEMPTED:
-      print("Continuing the run from the last saved checkpoint")
-
-  sgd_train_epoch, evaluate = train_utils.make_sgd_train_epoch(
+      _, params, net_state, _, _, _, _ = (
+        checkpoint_utils.parse_sgmcmc_checkpoint_dict(checkpoint_dict))
+      opt_state = optimizer.init(params)
+    elif status == checkpoint_utils.InitStatus.INIT_RANDOM:
+      print("Starting from random initialization with provided seed")
+      init_data = jax.tree_map(lambda elem: elem[0][:1], train_set)
+      params, net_state = net_init(net_init_key, init_data, True)
+      opt_state = optimizer.init(params)
+      net_state = jax.pmap(lambda _: net_state)(jnp.arange(num_devices))
+    else:
+      raise ValueError("Unknown initialization status: {}".format(status))
+    
+  sgmcmc_train_epoch, evaluate = train_utils.make_sgd_train_epoch(
     net_apply, log_likelihood_fn, log_prior_fn, optimizer, num_batches)
+  ensemble_acc = None
   
   for iteration in range(start_iteration, args.num_epochs):
     
     start_time = time.time()
-    params, net_state, opt_state, logprob_avg, key = sgd_train_epoch(
-        params, net_state, opt_state, train_set, key)
+    params, net_state, opt_state, logprob_avg, key = sgmcmc_train_epoch(
+      params, net_state, opt_state, train_set, key)
     iteration_time = time.time() - start_time
-
+    
     tabulate_dict = OrderedDict()
     tabulate_dict["iteration"] = iteration
-    tabulate_dict["step_size"] = lr_schedule(opt_state[-1].count)
+    tabulate_dict["step_size"] = lr_schedule(opt_state.count)
     tabulate_dict["train_logprob"] = logprob_avg
     tabulate_dict["train_acc"] = None
     tabulate_dict["test_logprob"] = None
     tabulate_dict["test_acc"] = None
+    tabulate_dict["ensemble_acc"] = ensemble_acc
+    tabulate_dict["n_ens"] = num_ensembled
     tabulate_dict["time"] = iteration_time
     
     with tf_writer.as_default():
       tf.summary.scalar("train/log_prob_running", logprob_avg, step=iteration)
-      tf.summary.scalar("hypers/step_size", lr_schedule(opt_state[-1].count),
+      tf.summary.scalar("hypers/step_size", lr_schedule(opt_state.count),
                         step=iteration)
       tf.summary.scalar("debug/iteration_time", iteration_time, step=iteration)
     
     if iteration % args.save_freq == 0 or iteration == args.num_epochs - 1:
       checkpoint_name = checkpoint_utils.make_checkpoint_name(iteration)
       checkpoint_path = os.path.join(dirname, checkpoint_name)
-      checkpoint_dict = checkpoint_utils.make_sgd_checkpoint_dict(
-          iteration, params, net_state, opt_state, key)
+      checkpoint_dict = checkpoint_utils.make_sgmcmc_checkpoint_dict(
+        iteration, params, net_state, opt_state, key, num_ensembled,
+        ensemble_predicted_probs)
       checkpoint_utils.save_checkpoint(checkpoint_path, checkpoint_dict)
     
     if (iteration % args.eval_freq == 0) or (iteration == args.num_epochs - 1):
@@ -135,12 +154,11 @@ def train_model():
                                                      test_set)
       train_log_prob, train_acc, train_ce, prior = (
         evaluate(params, net_state, train_set))
-      
+
       tabulate_dict["train_logprob"] = train_log_prob
       tabulate_dict["test_logprob"] = test_log_prob
       tabulate_dict["train_acc"] = train_acc
       tabulate_dict["test_acc"] = test_acc
-      
       with tf_writer.as_default():
         tf.summary.scalar("train/log_prob", train_log_prob, step=iteration)
         tf.summary.scalar("test/log_prob", test_log_prob, step=iteration)
@@ -148,9 +166,21 @@ def train_model():
         tf.summary.scalar("test/log_likelihood", test_ce, step=iteration)
         tf.summary.scalar("train/accuracy", train_acc, step=iteration)
         tf.summary.scalar("test/accuracy", test_acc, step=iteration)
+
+    if ((iteration > args.num_burnin_epochs) and
+        ((iteration - args.num_burnin_epochs) % args.ensemble_freq == 0)):
+      ensemble_predicted_probs, ensemble_acc, num_ensembled = (
+          train_utils.update_ensemble(
+              net_apply, params, net_state, test_set, num_ensembled,
+              ensemble_predicted_probs))
+      tabulate_dict["ensemble_acc"] = ensemble_acc
+      tabulate_dict["n_ens"] = num_ensembled
+      with tf_writer.as_default():
+        tf.summary.scalar("test/ens_accuracy", ensemble_acc, step=iteration)
+        tf.summary.scalar("debug/n_ens", num_ensembled, step=iteration)
     
     table = tabulate_utils.make_table(
-        tabulate_dict, iteration - start_iteration, args.tabulate_freq)
+      tabulate_dict, iteration - start_iteration, args.tabulate_freq)
     print(table)
 
 

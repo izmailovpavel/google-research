@@ -75,16 +75,6 @@ def _second(xy):
   return xy[1]
 
 
-def sample_momentum(params, normal_key):
-  num_leaves = len(jax.tree_leaves(params))
-  normal_keys = list(jax.random.split(normal_key, num_leaves))
-  treedef = jax.tree_structure(params)
-  normal_keys = jax.tree_unflatten(treedef, normal_keys)
-  momentum = jax.tree_multimap(lambda s, key: jax.random.normal(key, s.shape),
-                               params, normal_keys)
-  return momentum
-
-
 def get_kinetic_energy_diff(momentum1, momentum2):
   return sum([0.5 * jnp.sum(m1**2 - m2**2) for m1, m2 in
               zip(jax.tree_leaves(momentum1), jax.tree_leaves(momentum2))])
@@ -128,7 +118,6 @@ def make_adaptive_hmc_update(log_prob_and_grad_fn, log_prior_diff_fn):
       target_accept_rate=0.8,
       step_size_adaptation_speed=0.05,
       max_n_leapfrog=15000,
-      jitter_amt=0.2,
       do_mh_correction=True
   ):
 
@@ -136,12 +125,8 @@ def make_adaptive_hmc_update(log_prob_and_grad_fn, log_prior_diff_fn):
 
     n_leapfrog = jnp.array(jnp.ceil(trajectory_len / step_size), jnp.int32)
     n_leapfrog = jnp.minimum(n_leapfrog, max_n_leapfrog)
-    # TODO: why do we need to jitter the step size?
-    # jittered_step_size = jitter_stepsize(
-    #     step_size, target_accept_rate, step_size_adaptation_speed, jitter_key,
-    #     jitter_amt)
-
-    momentum = sample_momentum(params, normal_key)
+    
+    momentum, _ = tree_utils.normal_like_tree(params, normal_key)
 
     new_params, net_state, new_momentum, new_grad, new_log_likelihood = (
         leapfrog(dataset, params, net_state, momentum, state_grad,
@@ -149,8 +134,6 @@ def make_adaptive_hmc_update(log_prob_and_grad_fn, log_prior_diff_fn):
     accept_prob = get_accept_prob(
         log_likelihood, params, momentum,
         new_log_likelihood, new_params, new_momentum)
-    # accepted = (
-    #     jax.random.uniform(uniform_key, log_likelihood.shape) < accept_prob)
     accepted = jax.random.uniform(uniform_key) < accept_prob
 
     step_size = adapt_step_size(

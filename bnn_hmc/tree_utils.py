@@ -48,3 +48,13 @@ def get_first_elem_in_sharded_tree(tree):
 
 def tree_norm(a):
   return float(jnp.sqrt(sum([jnp.sum(p_a ** 2) for p_a in jax.tree_leaves(a)])))
+
+
+def normal_like_tree(a, key):
+  treedef = jax.tree_structure(a)
+  num_vars = len(jax.tree_leaves(a))
+  all_keys = jax.random.split(key, num=(num_vars + 1))
+  noise = jax.tree_multimap(
+      lambda p, k: jax.random.normal(k, shape=p.shape),
+      a, jax.tree_unflatten(treedef, all_keys[1:]))
+  return noise, all_keys[0]

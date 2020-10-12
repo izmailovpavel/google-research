@@ -47,6 +47,17 @@ def make_cosine_lr_schedule(init_lr, total_steps):
   return schedule
 
 
+def make_cosine_lr_schedule_with_burnin(
+    init_lr, final_lr, burnin_steps
+):
+  """Cosine LR schedule with burn-in for SG-MCMC."""
+  def schedule(step):
+    t = jnp.minimum(step / burnin_steps, 1.)
+    coef = (1 + jnp.cos(t * onp.pi)) * 0.5
+    return coef * init_lr + (1 - coef) * final_lr
+  return schedule
+
+
 def make_optimizer(lr_schedule, momentum_decay):
   """Make SGD optimizer with momentum."""
   # Maximize log-prob instead of minimizing loss
@@ -54,10 +65,14 @@ def make_optimizer(lr_schedule, momentum_decay):
                      optix.scale_by_schedule(lr_schedule))
 
 
-def make_perdevice_log_prob_acc_grad_fns(
+def _make_perdevice_likelihood_prior_acc_grad_fns(
     net_apply, log_likelihood_fn, log_prior_fn
 ):
-  """Functions for training and evaluation, should be jax.lax.psum'ed"""
+  """Make functions for training and evaluation.
+  
+  Functions return likelihood, prior and gradients separately. These values
+  can be combined differently for full-batch and mini-batch methods.
+  """
   def likelihood_prior_and_grads_fn(params, net_state, batch):
     loss_acc_val_grad = jax.value_and_grad(
         log_likelihood_fn, has_aux=True, argnums=1)
@@ -75,7 +90,24 @@ def make_perdevice_log_prob_acc_grad_fns(
   return likelihood_prior_and_grads_fn, likelihood_prior_and_acc_fn
 
 
-def make_eval_fn(likelihood_prior_and_acc_fn):
+def _make_perdevice_minibatch_log_prob_and_grad(
+    perdevice_likelihood_prior_and_grads_fn, num_batches
+):
+  """Make log-prob and grad function for mini-batch methods."""
+  def perdevice_log_prob_and_grad(dataset, params, net_state):
+      likelihood, likelihood_grad, prior, prior_grad, _, net_state = (
+        perdevice_likelihood_prior_and_grads_fn(params, net_state, dataset))
+      likelihood = jax.lax.psum(likelihood, axis_name='i')
+      likelihood_grad = jax.lax.psum(likelihood_grad, axis_name='i')
+    
+      log_prob = likelihood * num_batches + prior
+      grad = jax.tree_multimap(
+        lambda gl, gp: gl * num_batches + gp, likelihood_grad, prior_grad)
+      return log_prob, grad, net_state
+  return perdevice_log_prob_and_grad
+
+
+def _make_eval_fn(likelihood_prior_and_acc_fn):
   """Define evaluation function."""
   @functools.partial(
     jax.pmap, axis_name='i', in_axes=(None, 0, 0)
@@ -164,7 +196,6 @@ def make_hmc_update(
           make_eval_fn(likelihood_prior_and_acc_fn))
 
 
-# TODO: rewrite analogously to HMC
 def make_sgd_train_epoch(
     net_apply, log_likelihood_fn, log_prior_fn, optimizer, num_batches
 ):
@@ -172,20 +203,12 @@ def make_sgd_train_epoch(
   Make a training epoch function for SGD-like optimizers.
   """
   perdevice_likelihood_prior_and_grads_fn, likelihood_prior_and_acc_fn = (
-    make_perdevice_log_prob_acc_grad_fns(
+    _make_perdevice_likelihood_prior_acc_grad_fns(
       net_apply, log_likelihood_fn, log_prior_fn))
-  
-  def _perdevice_log_prob_and_grad(dataset, params, net_state):
-    # Only call inside pmap
-    likelihood, likelihood_grad, prior, prior_grad, _, net_state = (
-        perdevice_likelihood_prior_and_grads_fn(params, net_state, dataset))
-    likelihood = jax.lax.psum(likelihood, axis_name='i')
-    likelihood_grad = jax.lax.psum(likelihood_grad, axis_name='i')
-    
-    log_prob = likelihood * num_batches + prior
-    grad = jax.tree_multimap(
-      lambda gl, gp: gl * num_batches + gp, likelihood_grad, prior_grad)
-    return log_prob, grad, net_state
+
+  _perdevice_log_prob_and_grad = _make_perdevice_minibatch_log_prob_and_grad(
+      perdevice_likelihood_prior_and_grads_fn, num_batches
+  )
   
   @functools.partial(
     jax.pmap, axis_name='i', static_broadcasted_argnums=[],
@@ -224,7 +247,7 @@ def make_sgd_train_epoch(
     loss_avg = jnp.mean(losses)
     return params, net_state, opt_state, loss_avg, new_key
   
-  return sgd_train_epoch, make_eval_fn(likelihood_prior_and_acc_fn)
+  return sgd_train_epoch, _make_eval_fn(likelihood_prior_and_acc_fn)
 
 
 @functools.partial(
@@ -249,3 +272,20 @@ def get_softmax_predictions(
   _, predictions = jax.lax.scan(get_batch_predictions, net_state, dataset)
 
   return predictions
+
+
+def update_ensemble(
+    net_apply, params, net_state, test_set, num_ensembled,
+    ensemble_predicted_probs
+):
+  predicted_probs = onp.asarray(get_softmax_predictions(
+      net_apply, params, net_state, test_set, 1, False))
+  if num_ensembled:
+    new_ensemble_predicted_probs = (
+        ensemble_predicted_probs +
+        (predicted_probs - ensemble_predicted_probs) / (num_ensembled + 1))
+  else:
+    new_ensemble_predicted_probs = predicted_probs
+  ensemble_preds = onp.argmax(new_ensemble_predicted_probs, -1)[:, 0]
+  ensemble_acc = (ensemble_preds == test_set[1]).mean()
+  return new_ensemble_predicted_probs, ensemble_acc, num_ensembled + 1

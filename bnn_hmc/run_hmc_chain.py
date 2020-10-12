@@ -146,21 +146,13 @@ def train_model():
     checkpoint_utils.save_checkpoint(checkpoint_path, checkpoint_dict)
 
     if ((not in_burnin) and accepted) or args.no_mh:
-      predicted_probs = train_utils.get_softmax_predictions(
-          net_apply, params, net_state, test_set, 1, False)
-      predicted_probs = onp.asarray(predicted_probs)
-      if num_ensembled:
-        ensemble_predicted_probs += (
-            (predicted_probs - ensemble_predicted_probs) / (num_ensembled + 1))
-      else:
-        ensemble_predicted_probs = predicted_probs
-      num_ensembled += 1
-      ensemble_preds = onp.argmax(ensemble_predicted_probs, -1)[:, 0]
-      ensemble_acc = (ensemble_preds == test_set[1]).mean()
-
-    test_log_prob, test_acc, test_ce, _ = evaluate(params, net_state, test_set)
-    train_log_prob, train_acc, train_ce, prior = (
-        evaluate(params, net_state, train_set))
+      ensemble_predicted_probs, ensemble_acc, num_ensembled = (
+          train_utils.update_ensemble(
+              net_apply, params, net_state, test_set, num_ensembled,
+              ensemble_predicted_probs))
+      test_log_prob, test_acc, test_ce, _ = evaluate(params, net_state, test_set)
+      train_log_prob, train_acc, train_ce, prior = (
+          evaluate(params, net_state, train_set))
       
     tabulate_dict = OrderedDict()
     tabulate_dict["iteration"] = iteration
