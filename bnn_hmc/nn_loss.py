@@ -29,32 +29,33 @@ from bnn_hmc import tree_utils
 # PriorFn = Callable[[hk.Params], jnp.array]
 # LikelihoodFn = Callable[[hk.Transformed, hk.Params, Batch], LossAcc]
 
-def make_xent_log_likelihood(num_classes):
+def make_xent_log_likelihood(num_classes, temperature):
   def xent_log_likelihood(net_apply, params, net_state, batch, is_training):
     """Computes the negative log-likelihood."""
     _, y = batch
     logits, net_state = net_apply(params, net_state, None, batch, is_training)
     labels = jax.nn.one_hot(y, num_classes)
-    softmax_xent = jnp.sum(labels * jax.nn.log_softmax(logits))
+    softmax_xent = jnp.sum(labels * jax.nn.log_softmax(logits)) / temperature
   
     accuracy = jnp.mean(jnp.argmax(logits, axis=-1) == y)
     return softmax_xent, (accuracy, net_state)
   return xent_log_likelihood
 
 
-def make_gaussian_log_prior(weight_decay):
+def make_gaussian_log_prior(weight_decay, temperature):
   """Returns the Gaussian log-density and delta given weight decay."""
   def log_prior(params):
     """Computes the Gaussian prior log-density."""
     n_params = sum([p.size for p in jax.tree_leaves(params)])
-    return -(0.5 * tree_utils.tree_dot(params, params) * weight_decay +
-             0.5 * n_params * jnp.log(weight_decay / (2 * math.pi)))
+    log_prob = -(0.5 * tree_utils.tree_dot(params, params) * weight_decay +
+                 0.5 * n_params * jnp.log(weight_decay / (2 * math.pi)))
+    return log_prob / temperature
   
   def log_prior_diff(params1, params2):
     """Computes the delta in  Gaussian prior log-density."""
     diff = sum([jnp.sum(p1**2 - p2**2) for p1, p2 in
                 zip(jax.tree_leaves(params1), jax.tree_leaves(params2))])
-    return -0.5 * weight_decay * diff
+    return -0.5 * weight_decay * diff / temperature
 
   return log_prior, log_prior_diff
 

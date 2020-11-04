@@ -36,12 +36,12 @@ parser = argparse.ArgumentParser(description="Run SGD on a cloud TPU")
 cmd_args_utils.add_common_flags(parser)
 parser.add_argument("--init_step_size", type=float, default=1.e-7,
                     help="Initial SGD step size")
-parser.add_argument("--final_step_size", type=float, default=5.e-7,
+parser.add_argument("--final_step_size", type=float, default=5.e-8,
                     help="Initial SGD step size")
 parser.add_argument("--num_epochs", type=int, default=1000,
                     help="Total number of SGD epochs iterations")
 parser.add_argument("--num_burnin_epochs", type=int, default=300,
-                    help="Total number of SGD epochs iterations")
+                    help="Number of epochs before final lr is reached")
 parser.add_argument("--batch_size", type=int, default=80, help="Batch size")
 parser.add_argument("--eval_freq", type=int, default=10,
                     help="Frequency of evaluation (epochs)")
@@ -56,9 +56,10 @@ train_utils.set_up_jax(args.tpu_ip)
 
 def train_model():
   subdirname = (
-    "sgld_wd_{}_stepsizes_{}_{}_batchsize_{}_epochs{}_{}_seed_{}".format(
+    "sgld_wd_{}_stepsizes_{}_{}_batchsize_{}_epochs{}_{}_temp_{}_seed_{}".format(
     args.weight_decay, args.init_step_size, args.final_step_size,
-    args.batch_size, args.seed, args.num_epochs, args.num_burnin_epochs))
+    args.batch_size, args.num_epochs, args.num_burnin_epochs,
+    args.temperature, args.seed))
   dirname = os.path.join(args.dir, subdirname)
   os.makedirs(dirname, exist_ok=True)
   tf_writer = tf.summary.create_file_writer(dirname)
@@ -69,9 +70,10 @@ def train_model():
   
   net_apply, net_init = models.get_model(args.model_name, num_classes)
   
-  log_likelihood_fn = nn_loss.make_xent_log_likelihood(num_classes)
-  log_prior_fn, _ = (
-    nn_loss.make_gaussian_log_prior(weight_decay=args.weight_decay))
+  log_likelihood_fn = nn_loss.make_xent_log_likelihood(
+      num_classes, args.temperature)
+  log_prior_fn, _ = nn_loss.make_gaussian_log_prior(
+      args.weight_decay, args.temperature)
   
   num_data = jnp.size(train_set[1])
   num_batches = num_data // args.batch_size

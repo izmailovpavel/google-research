@@ -27,6 +27,8 @@ def add_common_flags(parser):
   parser.add_argument("--seed", type=int, default=0, help="Random seed")
   parser.add_argument("--weight_decay", type=float, default=15.,
                       help="Weight decay, equivalent to setting prior std")
+  parser.add_argument("--temperature", type=float, default=1.,
+                      help="Temperature of the posterior")
   parser.add_argument("--init_checkpoint", type=str, default=None,
                       help="Checkpoint to use for initialization of the chain")
   parser.add_argument("--tabulate_freq", type=int, default=40,
