@@ -21,6 +21,7 @@ import jax
 import tensorflow.compat.v2 as tf
 import argparse
 import time
+import numpy as onp
 from collections import OrderedDict
 
 from bnn_hmc import data
@@ -31,6 +32,8 @@ from bnn_hmc import checkpoint_utils
 from bnn_hmc import cmd_args_utils
 from bnn_hmc import tabulate_utils
 from bnn_hmc import sgmcmc
+from bnn_hmc import metrics
+
 
 parser = argparse.ArgumentParser(description="Run SGD on a cloud TPU")
 cmd_args_utils.add_common_flags(parser)
@@ -177,8 +180,17 @@ def train_model():
               ensemble_predicted_probs))
       tabulate_dict["ensemble_acc"] = ensemble_acc
       tabulate_dict["n_ens"] = num_ensembled
+      test_labels = onp.asarray(test_set[1])
+      
+      ensemble_nll = metrics.nll(ensemble_predicted_probs, test_labels)
+      ensemble_calibration = metrics.calibration_curve(
+          ensemble_predicted_probs, test_labels)
+      
       with tf_writer.as_default():
         tf.summary.scalar("test/ens_accuracy", ensemble_acc, step=iteration)
+        tf.summary.scalar(
+            "test/ens_ece", ensemble_calibration["ece"], step=iteration)
+        tf.summary.scalar("test/ens_nll", ensemble_nll, step=iteration)
         tf.summary.scalar("debug/n_ens", num_ensembled, step=iteration)
     
     table = tabulate_utils.make_table(

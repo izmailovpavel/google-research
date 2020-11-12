@@ -6,8 +6,19 @@ Partly adapted from https://github.com/wjmaddox/swa_gaussian/blob/master/experim
 import numpy as onp
 
 
+def _flatten_batch_axes(arr):
+  pred_dim = arr.shape[-1]
+  batch_dim = arr.size // pred_dim
+  return arr.reshape((batch_dim, pred_dim))
+
+
+def _flatten_outputs_labels(outputs, labels):
+  return _flatten_batch_axes(outputs), labels.reshape(-1)
+
+
 def accuracy(outputs, labels):
   """Negative log-likelihood."""
+  outputs, labels = _flatten_outputs_labels(outputs, labels)
   labels = labels.astype(int)
   preds = onp.argmax(outputs, axis=1)
   return (preds == labels).mean()
@@ -15,6 +26,7 @@ def accuracy(outputs, labels):
 
 def nll(outputs, labels, normalized=True):
   """Negative log-likelihood."""
+  outputs, labels = _flatten_outputs_labels(outputs, labels)
   labels = labels.astype(int)
   idx = (onp.arange(labels.size), labels)
   log_ps = onp.log(outputs[idx])
@@ -26,7 +38,7 @@ def nll(outputs, labels, normalized=True):
 
 def calibration_curve(outputs, labels, num_bins=20):
   """Compute calibration curve and ECE."""
-
+  outputs, labels = _flatten_outputs_labels(outputs, labels)
   confidences = onp.max(outputs, 1)
   num_inputs = confidences.shape[0]
   step = (num_inputs + num_bins - 1) // num_bins
