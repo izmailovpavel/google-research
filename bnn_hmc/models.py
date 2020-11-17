@@ -19,10 +19,8 @@ from typing import Tuple
 import haiku as hk
 import jax
 import jax.numpy as jnp
-from jax.experimental.callback import rewrite
-from typing import Callable
 
-from bnn_hmc import precision_utils
+
 
 
 Batch = Tuple[jnp.ndarray, jnp.ndarray]
@@ -38,7 +36,6 @@ def make_lenet_fn(num_classes):
   def lenet_fn(batch, is_training):
     """Network inspired by LeNet-5."""
     x, _ = batch
-    x = x.astype(jnp.float32)
   
     cnn = hk.Sequential([
         hk.Conv2D(output_channels=32, kernel_shape=5, padding="SAME"),
@@ -108,7 +105,6 @@ def make_resnet_fn(
   def forward(batch, is_training):
     num_filters = width
     x, _ = batch
-    x = x.astype(jnp.float32)
     x = _resnet_layer(
         x, num_filters=num_filters, activation=jax.nn.relu, use_bias=use_bias,
         normalization_layer=normalization_layer
@@ -203,7 +199,4 @@ def get_model(model_name, num_classes):
   net_fn = _MODEL_FNS[model_name](num_classes)
   net = hk.transform_with_state(net_fn)
   net_apply = net.apply
-  net_apply = jax.experimental.callback.rewrite(
-    net_apply,
-    precision_utils.HIGH_PRECISION_RULES)
   return net_apply, net.init

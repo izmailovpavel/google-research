@@ -39,6 +39,8 @@ def add_common_flags(parser):
                       help="Name of the dataset")
   parser.add_argument("--model_name", type=str, default="lenet",
                       help="Name of the dataset")
+  parser.add_argument("--use_float64", dest="use_float64", action="store_true",
+                      help="Use float64 precision (does not work on TPUs)")
 
 
 def save_cmd(dirname, tf_writer):

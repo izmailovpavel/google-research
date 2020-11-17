@@ -20,6 +20,7 @@ from typing import Callable
 import jax
 from jax.experimental import optix
 import jax.numpy as jnp
+import tensorflow.compat.v2 as tf
 import numpy as onp
 import functools
 from jax.config import config
@@ -37,6 +38,7 @@ def set_up_jax(tpu_ip):
   if tpu_ip is not None:
     config.FLAGS.jax_xla_backend = "tpu_driver"
     config.FLAGS.jax_backend_target = "grpc://{}:8470".format(tpu_ip)
+  tf.config.set_visible_devices([], 'GPU')
 
 
 def make_cosine_lr_schedule(init_lr, total_steps):

@@ -33,6 +33,7 @@ from bnn_hmc import cmd_args_utils
 from bnn_hmc import tabulate_utils
 from bnn_hmc import sgmcmc
 from bnn_hmc import metrics
+from bnn_hmc import precision_utils
 
 
 parser = argparse.ArgumentParser(description="Run SGD on a cloud TPU")
@@ -53,6 +54,7 @@ parser.add_argument("--save_freq", type=int, default=50,
 parser.add_argument("--ensemble_freq", type=int, default=10,
                     help="Frequency of checkpointing (epochs)")
 
+
 args = parser.parse_args()
 train_utils.set_up_jax(args.tpu_ip)
 
@@ -68,10 +70,12 @@ def train_model():
   tf_writer = tf.summary.create_file_writer(dirname)
   cmd_args_utils.save_cmd(dirname, tf_writer)
   
+  dtype = jnp.float64 if args.use_float64 else jnp.float32
   train_set, test_set, num_classes = data.make_ds_pmap_fullbatch(
-    name=args.dataset_name)
+    args.dataset_name, dtype)
   
   net_apply, net_init = models.get_model(args.model_name, num_classes)
+  net_apply = precision_utils.rewrite_high_precision(net_apply)
   
   log_likelihood_fn = nn_loss.make_xent_log_likelihood(
       num_classes, args.temperature)
@@ -121,6 +125,7 @@ def train_model():
   sgmcmc_train_epoch, evaluate = train_utils.make_sgd_train_epoch(
     net_apply, log_likelihood_fn, log_prior_fn, optimizer, num_batches)
   ensemble_acc = None
+  
   
   for iteration in range(start_iteration, args.num_epochs):
     
@@ -200,4 +205,5 @@ def train_model():
 
 if __name__ == "__main__":
   print("JAX sees the following devices:", jax.devices())
+  print("TF sees the following devices:", tf.config.get_visible_devices())
   train_model()

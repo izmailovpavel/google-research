@@ -136,7 +136,7 @@ def pmap_dataset(ds, n_devices=None):
   return jax.pmap(lambda x: x)(batch_split_axis(ds, n_devices))
   
 
-def make_ds_pmap_fullbatch(name="cifar10", n_devices=None):
+def make_ds_pmap_fullbatch(name, dtype, n_devices=None):
   """Make train and test sets sharded over batch dim."""
   name = name.lower()
   if name in ImgDatasets._value2member_map_:
@@ -148,4 +148,8 @@ def make_ds_pmap_fullbatch(name="cifar10", n_devices=None):
   
   train_set, test_set = tuple(pmap_dataset(ds, n_devices)
                               for ds in (train_set, test_set))
+
+  train_set, test_set = map(
+      lambda ds: (ds[0].astype(dtype), ds[1]), (train_set, test_set))
+  
   return train_set, test_set, n_classes
