@@ -126,6 +126,12 @@ def train_model():
     net_apply, log_likelihood_fn, log_prior_fn, optimizer, num_batches)
   ensemble_acc = None
   
+  assert train_set[0].dtype == dtype, (
+      "Dataset data type {} does not match specified data type {}".format(
+          train_set[0].dtype, dtype))
+  assert jax.tree_flatten(params)[0][0].dtype == dtype, (
+      "Params data type {} does not match specified data type {}".format(
+          jax.tree_flatten(params)[0][0].dtype, dtype))
   
   for iteration in range(start_iteration, args.num_epochs):
     

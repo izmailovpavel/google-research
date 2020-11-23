@@ -58,15 +58,16 @@ def train_model():
   os.makedirs(dirname, exist_ok=True)
   tf_writer = tf.summary.create_file_writer(dirname)
   cmd_args_utils.save_cmd(dirname, tf_writer)
-  
+
+  dtype = jnp.float64 if args.use_float64 else jnp.float32
   train_set, test_set, num_classes = data.make_ds_pmap_fullbatch(
-    name=args.dataset_name)
+    args.dataset_name, dtype)
   
   net_apply, net_init = models.get_model(args.model_name, num_classes)
   
-  log_likelihood_fn = nn_loss.make_xent_log_likelihood(num_classes)
+  log_likelihood_fn = nn_loss.make_xent_log_likelihood(num_classes, 1.)
   log_prior_fn, _ = (
-    nn_loss.make_gaussian_log_prior(weight_decay=args.weight_decay))
+    nn_loss.make_gaussian_log_prior(args.weight_decay, 1.))
 
   num_data = jnp.size(train_set[1])
   num_batches = num_data // args.batch_size

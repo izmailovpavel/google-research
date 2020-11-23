@@ -33,11 +33,13 @@ _CHECKPOINT_FORMAT_STRING = "model_step_{}.pt"
 
 class ImgDatasets(Enum):
   CIFAR10 = "cifar10"
+  MNIST = "mnist"
 
 
 # Format: (img_mean, img_std)
 _ALL_IMG_DS_STATS = {
-    ImgDatasets.CIFAR10: ((0.49, 0.48, 0.44), (0.2, 0.2, 0.2))
+  ImgDatasets.CIFAR10: ((0.49, 0.48, 0.44), (0.2, 0.2, 0.2)),
+  ImgDatasets.MNIST: ((0.1307,), (0.3081,))
 }
 
 _IMDB_CONFIG = {
@@ -84,18 +86,18 @@ def load_image_dataset(
                                with_info=True)
   num_classes = dataset_info.features["label"].num_classes
   num_examples = dataset_info.splits[split].num_examples
-
+  num_channels = dataset_info.features['image'].shape[-1]
+  
   def img_to_float32(image, label):
     return tf.image.convert_image_dtype(image, tf.float32), label
 
   ds = ds.map(img_to_float32).cache()
   ds_stats = _ALL_IMG_DS_STATS[ImgDatasets(name)]
-
   def img_normalize(image, label):
     """Normalize the image to zero mean and unit variance."""
     mean, std = ds_stats
-    image -= tf.constant(mean, shape=[1, 1, 3], dtype=image.dtype)
-    image /= tf.constant(std, shape=[1, 1, 3], dtype=image.dtype)
+    image -= tf.constant(mean, shape=[1, 1, num_channels], dtype=image.dtype)
+    image /= tf.constant(std, shape=[1, 1, num_channels], dtype=image.dtype)
     return image, label
 
   ds = ds.map(img_normalize)
