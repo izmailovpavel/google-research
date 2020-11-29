@@ -56,7 +56,7 @@ parser.add_argument("--ensemble_freq", type=int, default=10,
 
 
 args = parser.parse_args()
-train_utils.set_up_jax(args.tpu_ip)
+train_utils.set_up_jax(args.tpu_ip, args.use_float64)
 
 
 def train_model():

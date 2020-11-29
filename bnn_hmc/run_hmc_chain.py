@@ -57,15 +57,21 @@ parser.add_argument("--no_mh", default=False, action='store_true',
                     help="If set, Metropolis Hastings correction is ignored")
 
 args = parser.parse_args()
-train_utils.set_up_jax(args.tpu_ip)
+train_utils.set_up_jax(args.tpu_ip, args.use_float64)
 
 
+def _get_types(tree):
+  return [p.dtype for p in jax.tree_flatten(tree)[0]]
+  
+  
 def train_model():
+  
   subdirname = (
-    "model_{}_wd_{}_stepsize_{}_trajlen_{}_seed_{}_burnin_{}_{}_mh_{}".format(
+    "model_{}_wd_{}_stepsize_{}_trajlen_{}_burnin_{}_{}_mh_{}_temp_{}_"
+    "seed_{}".format(
       args.model_name, args.weight_decay, args.step_size, args.trajectory_len,
-      args.seed, args.num_burn_in_iterations, args.burn_in_step_size_factor,
-      not args.no_mh
+      args.num_burn_in_iterations, args.burn_in_step_size_factor,
+      not args.no_mh, args.temperature, args.seed
     ))
   dirname = os.path.join(args.dir, subdirname)
   os.makedirs(dirname, exist_ok=True)
@@ -73,13 +79,15 @@ def train_model():
   cmd_args_utils.save_cmd(dirname, tf_writer)
   num_devices = len(jax.devices())
 
+  dtype = jnp.float64 if args.use_float64 else jnp.float32
   train_set, test_set, num_classes = data.make_ds_pmap_fullbatch(
-    name=args.dataset_name)
+    args.dataset_name, dtype)
 
   net_apply, net_init = models.get_model(args.model_name, num_classes)
   
   checkpoint_dict, status = checkpoint_utils.initialize(
       dirname, args.init_checkpoint)
+  
   if status == checkpoint_utils.InitStatus.LOADED_PREEMPTED:
     print("Continuing the run from the last saved checkpoint")
     (start_iteration, params, net_state, key, step_size, _, num_ensembled,
@@ -105,11 +113,21 @@ def train_model():
       net_state = jax.pmap(lambda _: net_state)(jnp.arange(num_devices))
     else:
       raise ValueError("Unknown initialization status: {}".format(status))
+
+  # manually convert all params to dtype
+  params = jax.tree_map(lambda p: p.astype(dtype), params)
+  
+  param_types = _get_types(params)
+  assert all([p_type == dtype for p_type in param_types]), (
+    "Params data types {} do not match specified data type {}".format(
+      param_types, dtype))
+    
   trajectory_len = args.trajectory_len
 
-  log_likelihood_fn = nn_loss.make_xent_log_likelihood(num_classes)
-  log_prior_fn, log_prior_diff_fn = (
-    nn_loss.make_gaussian_log_prior(weight_decay=args.weight_decay))
+  log_likelihood_fn = nn_loss.make_xent_log_likelihood(
+    num_classes, args.temperature)
+  log_prior_fn, log_prior_diff_fn = nn_loss.make_gaussian_log_prior(
+    args.weight_decay, args.temperature)
 
   update, get_log_prob_and_grad, evaluate = train_utils.make_hmc_update(
     net_apply, log_likelihood_fn, log_prior_fn, log_prior_diff_fn,
@@ -117,6 +135,15 @@ def train_model():
 
   log_prob, state_grad, log_likelihood, net_state = (
       get_log_prob_and_grad(train_set, params, net_state))
+
+  assert log_prob.dtype == dtype, (
+    "log_prob data type {} does not match specified data type {}".format(
+        log_prob.dtype, dtype))
+
+  grad_types = _get_types(state_grad)
+  assert all([g_type == dtype for g_type in grad_types]), (
+    "Gradient data types {} do not match specified data type {}".format(
+      grad_types, dtype))
 
   ensemble_acc = 0
   
@@ -128,7 +155,8 @@ def train_model():
       initial_step_size = args.step_size
       final_step_size = args.burn_in_step_size_factor * args.step_size
       step_size = final_step_size * alpha + initial_step_size * (1 - alpha)
-    in_burnin = (iteration >= args.num_burn_in_iterations)
+    in_burnin = (iteration < args.num_burn_in_iterations)
+    print("In burnin:", in_burnin)
     do_mh_correction = (not args.no_mh) and in_burnin
 
     start_time = time.time()
@@ -150,9 +178,10 @@ def train_model():
           train_utils.update_ensemble(
               net_apply, params, net_state, test_set, num_ensembled,
               ensemble_predicted_probs))
-      test_log_prob, test_acc, test_ce, _ = evaluate(params, net_state, test_set)
-      train_log_prob, train_acc, train_ce, prior = (
-          evaluate(params, net_state, train_set))
+      
+    test_log_prob, test_acc, test_ce, _ = evaluate(params, net_state, test_set)
+    train_log_prob, train_acc, train_ce, prior = (
+        evaluate(params, net_state, train_set))
       
     tabulate_dict = OrderedDict()
     tabulate_dict["iteration"] = iteration

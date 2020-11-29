@@ -19,6 +19,7 @@ from typing import Generator, Tuple
 
 import jax
 import numpy as onp
+from jax import numpy as jnp
 import tensorflow as tf
 import tensorflow_datasets as tfds
 from tensorflow.keras.datasets import imdb
@@ -145,6 +146,7 @@ def make_ds_pmap_fullbatch(name, dtype, n_devices=None):
     train_set, test_set, _, n_classes = get_image_dataset(name)
   elif name == "imdb":
     train_set, test_set, _, n_classes = load_imdb_dataset()
+    dtype = jnp.int32
   else:
     raise ValueError("Unknown dataset name: {}".format(name))
   

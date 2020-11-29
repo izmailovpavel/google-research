@@ -34,10 +34,12 @@ Opt = optix.GradientTransformation
 _CHECKPOINT_FORMAT_STRING = "model_step_{}.pt"
 
 
-def set_up_jax(tpu_ip):
+def set_up_jax(tpu_ip, use_float64):
   if tpu_ip is not None:
     config.FLAGS.jax_xla_backend = "tpu_driver"
     config.FLAGS.jax_backend_target = "grpc://{}:8470".format(tpu_ip)
+  if use_float64:
+     config.update("jax_enable_x64", True)
   tf.config.set_visible_devices([], 'GPU')
 
 
@@ -135,8 +137,8 @@ def make_hmc_update(
   """Make update and ev0al functions for HMC training."""
 
   perdevice_likelihood_prior_and_grads_fn, likelihood_prior_and_acc_fn = (
-      make_perdevice_log_prob_acc_grad_fns(
-          net_apply, log_likelihood_fn, log_prior_fn))
+    _make_perdevice_likelihood_prior_acc_grad_fns(
+      net_apply, log_likelihood_fn, log_prior_fn))
   
   def _perdevice_log_prob_and_grad(dataset, params, net_state):
     # Only call inside pmap
@@ -195,7 +197,7 @@ def make_hmc_update(
             likelihood[0], net_state)
 
   return (update, get_log_prob_and_grad,
-          make_eval_fn(likelihood_prior_and_acc_fn))
+          _make_eval_fn(likelihood_prior_and_acc_fn))
 
 
 def make_sgd_train_epoch(

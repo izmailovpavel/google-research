@@ -44,19 +44,12 @@ def make_leapfrog(log_prob_and_grad):
       momentum = jax.tree_multimap(
         lambda m, g: m + 0.5 * step_size * g, momentum, grad)
       return params, net_state, momentum, grad, log_prob, log_likelihood
-    
-    # TODO: go back to lax.fori_loop
-    # Do not use `lax.fori_loop` to avoid jit-of-pmap.
-    # for _ in tqdm.tqdm(range(n_leapfrog)):
-    #   params, net_state, momentum, grad, log_prob, log_likelihood = (
-    #       _leapfrog_body)
-    # return params, net_state, momentum, grad, log_likelihood
-    
+   
     init_vals = (
         init_params, init_net_state, init_momentum, init_grad, 0., 0.)
     (new_params, new_net_state, new_momentum, new_grad, new_log_prob,
      new_log_likelihood) = jax.lax.fori_loop(
-        0, n_leapfrog, _leapfrog_body, init_vals)
+        jnp.zeros_like(n_leapfrog), n_leapfrog, _leapfrog_body, init_vals)
     return (
       new_params, new_net_state, new_momentum, new_grad, new_log_likelihood)
 
