@@ -107,23 +107,18 @@ def make_adaptive_hmc_update(log_prob_and_grad_fn, log_prior_diff_fn):
       state_grad,
       key,
       step_size,
-      trajectory_len,
-      target_accept_rate=0.8,
-      step_size_adaptation_speed=0.05,
-      max_n_leapfrog=15000,
+      n_leapfrog_steps,
+      target_accept_rate,
+      step_size_adaptation_speed,
       do_mh_correction=True
   ):
 
     normal_key, uniform_key, jitter_key = jax.random.split(key, 3)
-
-    n_leapfrog = jnp.array(jnp.ceil(trajectory_len / step_size), jnp.int32)
-    n_leapfrog = jnp.minimum(n_leapfrog, max_n_leapfrog)
-    
     momentum, _ = tree_utils.normal_like_tree(params, normal_key)
 
     new_params, net_state, new_momentum, new_grad, new_log_likelihood = (
         leapfrog(dataset, params, net_state, momentum, state_grad,
-                 step_size, n_leapfrog))
+                 step_size, n_leapfrog_steps))
     accept_prob = get_accept_prob(
         log_likelihood, params, momentum,
         new_log_likelihood, new_params, new_momentum)

@@ -131,8 +131,8 @@ def _make_eval_fn(likelihood_prior_and_acc_fn):
 
 
 def make_hmc_update(
-    net_apply, log_likelihood_fn, log_prior_fn,
-    log_prior_diff_fn, target_accept_rate=0.9, step_size_adaptation_speed=0.
+    net_apply, log_likelihood_fn, log_prior_fn, log_prior_diff_fn,
+    max_num_leapfrog_steps, target_accept_rate, step_size_adaptation_speed
 ):
   """Make update and ev0al functions for HMC training."""
 
@@ -159,12 +159,12 @@ def make_hmc_update(
   )
   def pmap_update(
       dataset, params, net_state, log_likelihood, state_grad, key, step_size,
-      trajectory_len, do_mh_correction
+      n_leapfrog_steps, do_mh_correction
   ):
     (params, net_state, log_likelihood, state_grad, step_size, accept_prob,
      accepted) = hmc_update(
         dataset, params, net_state, log_likelihood, state_grad, key, step_size,
-        trajectory_len, target_accept_rate=target_accept_rate,
+        n_leapfrog_steps, target_accept_rate=target_accept_rate,
         step_size_adaptation_speed=step_size_adaptation_speed,
         do_mh_correction=do_mh_correction)
     key, = jax.random.split(key, 1)
@@ -175,10 +175,16 @@ def make_hmc_update(
       dataset, params, net_state, log_likelihood, state_grad, key, step_size,
       trajectory_len, do_mh_correction
   ):
+    n_leapfrog = jnp.array(jnp.ceil(trajectory_len / step_size), jnp.int32)
+    assert n_leapfrog <= max_num_leapfrog_steps, (
+      "The trajectory length results in number of leapfrog steps {} which is "
+      "higher than max_n_leapfrog {}".format(n_leapfrog, max_num_leapfrog_steps)
+    )
+    
     (params, net_state, log_likelihood, state_grad, step_size, key,
      accept_prob, accepted) = pmap_update(
         dataset, params, net_state, log_likelihood, state_grad, key, step_size,
-        trajectory_len, do_mh_correction)
+        n_leapfrog, do_mh_correction)
     params, state_grad = map(
         tree_utils.get_first_elem_in_sharded_tree, [params, state_grad])
     log_likelihood, step_size, key, accept_prob, accepted = map(

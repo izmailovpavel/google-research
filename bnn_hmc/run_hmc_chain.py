@@ -51,6 +51,9 @@ parser.add_argument("--trajectory_len", type=float, default=1.e-3,
                     help="HMC trajectory length")
 parser.add_argument("--num_iterations", type=int, default=1000,
                     help="Total number of HMC iterations")
+parser.add_argument("--max_num_leapfrog_steps", type=int, default=10000,
+                    help="Maximum number of leapfrog steps allowed; increase to"
+                         "run longer trajectories")
 parser.add_argument("--num_burn_in_iterations", type=int, default=0,
                     help="Number of burn-in iterations")
 parser.add_argument("--no_mh", default=False, action='store_true',
@@ -131,7 +134,8 @@ def train_model():
 
   update, get_log_prob_and_grad, evaluate = train_utils.make_hmc_update(
     net_apply, log_likelihood_fn, log_prior_fn, log_prior_diff_fn,
-    args.target_accept_rate, args.step_size_adaptation_speed)
+    args.max_num_leapfrog_steps, args.target_accept_rate,
+    args.step_size_adaptation_speed)
 
   log_prob, state_grad, log_likelihood, net_state = (
       get_log_prob_and_grad(train_set, params, net_state))
