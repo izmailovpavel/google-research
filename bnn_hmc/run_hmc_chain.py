@@ -34,6 +34,7 @@ from bnn_hmc import train_utils
 from bnn_hmc import checkpoint_utils
 from bnn_hmc import cmd_args_utils
 from bnn_hmc import tabulate_utils
+from bnn_hmc import metrics
 
 
 parser = argparse.ArgumentParser(description="Run an HMC chain on a cloud TPU")
@@ -160,8 +161,7 @@ def train_model():
       final_step_size = args.burn_in_step_size_factor * args.step_size
       step_size = final_step_size * alpha + initial_step_size * (1 - alpha)
     in_burnin = (iteration < args.num_burn_in_iterations)
-    print("In burnin:", in_burnin)
-    do_mh_correction = (not args.no_mh) and in_burnin
+    do_mh_correction = (not args.no_mh) and (not in_burnin)
 
     start_time = time.time()
     (params, net_state, log_likelihood, state_grad, step_size, key,
@@ -208,17 +208,40 @@ def train_model():
       tf.summary.scalar("train/accuracy", train_acc, step=iteration)
       tf.summary.scalar("test/accuracy", test_acc, step=iteration)
       tf.summary.scalar("test/ens_accuracy", ensemble_acc, step=iteration)
+      tf.summary.scalar("test/ens_accuracy", ensemble_acc, step=iteration)
+      tf.summary.scalar("test/ens_accuracy", ensemble_acc, step=iteration)
+      
+      if num_ensembled > 0:
+        test_labels = onp.asarray(test_set[1])
+        ensemble_nll = metrics.nll(ensemble_predicted_probs, test_labels)
+        ensemble_calibration = metrics.calibration_curve(
+            ensemble_predicted_probs, test_labels)
+        tf.summary.scalar(
+            "test/ens_ece", ensemble_calibration["ece"], step=iteration)
+        tf.summary.scalar("test/ens_nll", ensemble_nll, step=iteration)
+
+      tf.summary.scalar("telemetry/log_prior", prior, step=iteration)
+      tf.summary.scalar("telemetry/accept_prob", accept_prob, step=iteration)
+      tf.summary.scalar("telemetry/accepted", accepted, step=iteration)
+      tf.summary.scalar("telemetry/n_ens", num_ensembled, step=iteration)
+      tf.summary.scalar("telemetry/iteration_time", iteration_time,
+                        step=iteration)
       
       tf.summary.scalar("hypers/step_size", step_size, step=iteration)
       tf.summary.scalar("hypers/trajectory_len", trajectory_len,
                         step=iteration)
-      tf.summary.scalar("debug/accept_prob", accept_prob, step=iteration)
+      tf.summary.scalar("hypers/weight_decay", args.weight_decay,
+                        step=iteration)
+      tf.summary.scalar("hypers/temperature", args.temperature,
+                        step=iteration)
+
       tf.summary.scalar("debug/do_mh_correction", float(do_mh_correction),
                         step=iteration)
-      tf.summary.scalar("debug/iteration_time", iteration_time, step=iteration)
-      tf.summary.scalar("debug/accepted", accepted, step=iteration)
-      tf.summary.scalar("debug/n_ens", num_ensembled, step=iteration)
-      tf.summary.scalar("debug/prior", prior, step=iteration)
+      tf.summary.scalar("debug/in_burnin", float(in_burnin),
+                        step=iteration)
+      
+      
+      
 
     table = tabulate_utils.make_table(
       tabulate_dict, iteration - start_iteration, args.tabulate_freq)

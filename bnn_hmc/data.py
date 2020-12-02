@@ -34,12 +34,14 @@ _CHECKPOINT_FORMAT_STRING = "model_step_{}.pt"
 
 class ImgDatasets(Enum):
   CIFAR10 = "cifar10"
+  CIFAR100 = "cifar100"
   MNIST = "mnist"
 
 
 # Format: (img_mean, img_std)
 _ALL_IMG_DS_STATS = {
   ImgDatasets.CIFAR10: ((0.49, 0.48, 0.44), (0.2, 0.2, 0.2)),
+  ImgDatasets.CIFAR100: ((0.49, 0.48, 0.44), (0.2, 0.2, 0.2)),
   ImgDatasets.MNIST: ((0.1307,), (0.3081,))
 }
 
