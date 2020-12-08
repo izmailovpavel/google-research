@@ -31,6 +31,7 @@ from bnn_hmc import data
 from bnn_hmc import models
 from bnn_hmc import nn_loss
 from bnn_hmc import train_utils
+from bnn_hmc import tree_utils
 from bnn_hmc import checkpoint_utils
 from bnn_hmc import cmd_args_utils
 from bnn_hmc import tabulate_utils
@@ -62,10 +63,6 @@ parser.add_argument("--no_mh", default=False, action='store_true',
 
 args = parser.parse_args()
 train_utils.set_up_jax(args.tpu_ip, args.use_float64)
-
-
-def _get_types(tree):
-  return [p.dtype for p in jax.tree_flatten(tree)[0]]
   
   
 def train_model():
@@ -121,7 +118,7 @@ def train_model():
   # manually convert all params to dtype
   params = jax.tree_map(lambda p: p.astype(dtype), params)
   
-  param_types = _get_types(params)
+  param_types = tree_utils._get_types(params)
   assert all([p_type == dtype for p_type in param_types]), (
     "Params data types {} do not match specified data type {}".format(
       param_types, dtype))
@@ -145,7 +142,7 @@ def train_model():
     "log_prob data type {} does not match specified data type {}".format(
         log_prob.dtype, dtype))
 
-  grad_types = _get_types(state_grad)
+  grad_types = tree_utils._get_types(state_grad)
   assert all([g_type == dtype for g_type in grad_types]), (
     "Gradient data types {} do not match specified data type {}".format(
       grad_types, dtype))

@@ -19,6 +19,10 @@ import jax
 from jax import numpy as jnp
 
 
+def _get_types(tree):
+  return [p.dtype for p in jax.tree_flatten(tree)[0]]
+
+
 def tree_add(a, b):
   return jax.tree_multimap(lambda e1, e2: e1+e2, a, b)
 

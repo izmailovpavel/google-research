@@ -147,13 +147,11 @@ def make_resnet20_frn_fn(num_classes):
                         normalization_layer=FeatureResponseNorm)
 
 
-def make_cnn_lstm(num_classes,
-                  max_features=20000,
-                  embedding_size=128,
-                  cell_size=128,
-                  num_filters=64,
-                  kernel_size=5,
-                  pool_size=4):
+def make_cnn_lstm(
+    num_classes, max_features=20000, embedding_size=128, cell_size=128,
+    num_filters=64, kernel_size=5, pool_size=4,
+    use_swish=False, use_maxpool=True
+):
   """CNN LSTM architecture for the IMDB dataset."""
   def forward(batch, is_training):
     x, _ = batch
@@ -161,20 +159,31 @@ def make_cnn_lstm(num_classes,
     x = hk.Embed(vocab_size=max_features, embed_dim=embedding_size)(x)
     x = hk.Conv1D(output_channels=num_filters, kernel_shape=kernel_size,
                   padding="VALID")(x)
-    x = jax.nn.relu(x)
-    x = hk.MaxPool(
-        window_shape=pool_size, strides=pool_size, padding='VALID',
-        channel_axis=1)(x)
+    if use_swish:
+        x = jax.nn.swish(x)
+    else:
+        x = jax.nn.relu(x)
+    if use_maxpool:
+        x = hk.MaxPool(
+            window_shape=pool_size, strides=pool_size, padding='VALID',
+            channel_axis=2)(x)
     x = jnp.moveaxis(x, 1, 0)[:, :] #[T, B, F]
     lstm_layer = hk.LSTM(hidden_size=cell_size)
     init_state = lstm_layer.initial_state(batch_size)
-    # TODO: choose static vs dynamic unroll?
     x, state = hk.static_unroll(lstm_layer, x, init_state)
     x = x[-1]
     logits = hk.Linear(num_classes)(x)
     return logits
   
   return forward
+
+
+def make_smooth_cnn_lstm(
+    num_classes, max_features=20000, embedding_size=128, cell_size=128,
+    num_filters=64, kernel_size=5, pool_size=4
+):
+  return make_cnn_lstm(num_classes, max_features, embedding_size, cell_size,
+    num_filters, kernel_size, pool_size, use_swish=True, use_maxpool=False)
 
 
 def make_mlp(layer_dims, output_dim):
@@ -203,6 +212,7 @@ def get_model(model_name, num_classes):
     "resnet20": make_resnet20_fn,
     "resnet20_frn": make_resnet20_frn_fn,
     "cnn_lstm": make_cnn_lstm,
+    "smooth_cnn_lstm": make_smooth_cnn_lstm,
     "mlp_regression": make_mlp_regression,
     "mlp_classification": make_mlp_classification
   }

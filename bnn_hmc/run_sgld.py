@@ -28,6 +28,7 @@ from bnn_hmc import data
 from bnn_hmc import models
 from bnn_hmc import nn_loss
 from bnn_hmc import train_utils
+from bnn_hmc import tree_utils
 from bnn_hmc import checkpoint_utils
 from bnn_hmc import cmd_args_utils
 from bnn_hmc import tabulate_utils
@@ -125,13 +126,11 @@ def train_model():
   sgmcmc_train_epoch, evaluate = train_utils.make_sgd_train_epoch(
     net_apply, log_likelihood_fn, log_prior_fn, optimizer, num_batches)
   ensemble_acc = None
-  
-  assert train_set[0].dtype == dtype, (
-      "Dataset data type {} does not match specified data type {}".format(
-          train_set[0].dtype, dtype))
-  assert jax.tree_flatten(params)[0][0].dtype == dtype, (
-      "Params data type {} does not match specified data type {}".format(
-          jax.tree_flatten(params)[0][0].dtype, dtype))
+
+  param_types = tree_utils._get_types(params)
+  assert all([p_type == dtype for p_type in param_types]), (
+    "Params data types {} do not match specified data type {}".format(
+      param_types, dtype))
   
   for iteration in range(start_iteration, args.num_epochs):
     
