@@ -15,14 +15,12 @@
 
 """Optix implementations of SGMCMC optimizers."""
 
-from typing import Callable
-
 import jax
 from jax.experimental.optix import OptState
 from jax import numpy as jnp
 from jax.experimental.optix import GradientTransformation
 
-from bnn_hmc import tree_utils
+from bnn_hmc.utils import tree_utils
 
 
 class OptixSGLDState(OptState):

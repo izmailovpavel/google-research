@@ -19,7 +19,7 @@ import jax
 from jax import numpy as jnp
 
 
-def _get_types(tree):
+def tree_get_types(tree):
   return [p.dtype for p in jax.tree_flatten(tree)[0]]
 
 

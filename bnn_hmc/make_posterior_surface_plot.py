@@ -16,7 +16,6 @@
 """Create a posterior log-density surface visualization on a cloud TPU."""
 
 import os
-from jax.config import config
 from jax import numpy as jnp
 import numpy as onp
 import jax
@@ -25,13 +24,8 @@ from haiku._src.data_structures import FlatMapping
 import functools
 import tqdm
 
-from bnn_hmc import data
-from bnn_hmc import models
-from bnn_hmc import nn_loss
-from bnn_hmc import train_utils
-from bnn_hmc import checkpoint_utils
-from bnn_hmc import cmd_args_utils
-from bnn_hmc import tree_utils
+from core import data, losses, models
+from utils import checkpoint_utils, cmd_args_utils, train_utils, tree_utils
 
 from matplotlib import pyplot as plt
 
@@ -95,9 +89,9 @@ def run_visualization():
   net_apply, _ = models.get_model(args.model_name, num_classes)
   net_state = FlatMapping({})
   
-  log_likelihood_fn = nn_loss.make_xent_log_likelihood(num_classes)
+  log_likelihood_fn = losses.make_xent_log_likelihood(num_classes)
   log_prior_fn, _ = (
-    nn_loss.make_gaussian_log_prior(weight_decay=args.weight_decay))
+    losses.make_gaussian_log_prior(weight_decay=args.weight_decay))
 
   _, likelihood_prior_and_acc_fn = (
     train_utils.make_perdevice_log_prob_acc_grad_fns(

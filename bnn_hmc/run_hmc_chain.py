@@ -16,27 +16,23 @@
 """Run an Hamiltonian Monte Carlo chain on a cloud TPU."""
 
 import os
-import sys
-from jax.config import config
-import haiku as hk
 import numpy as onp
 from jax import numpy as jnp
 import jax
 import tensorflow.compat.v2 as tf
 import argparse
 import time
-from collections import OrderedDict
 
-from bnn_hmc import data
-from bnn_hmc import models
-from bnn_hmc import nn_loss
-from bnn_hmc import train_utils
-from bnn_hmc import tree_utils
-from bnn_hmc import checkpoint_utils
-from bnn_hmc import cmd_args_utils
-from bnn_hmc import tabulate_utils
-from bnn_hmc import metrics
-
+from bnn_hmc.core import data
+from bnn_hmc.core import losses
+from bnn_hmc.core import models
+from bnn_hmc.utils import checkpoint_utils
+from bnn_hmc.utils import cmd_args_utils
+from bnn_hmc.utils import logging_utils
+from bnn_hmc.utils import train_utils
+from bnn_hmc.utils import tree_utils
+from bnn_hmc.utils import metrics
+from bnn_hmc.utils import ensemble_utils
 
 parser = argparse.ArgumentParser(description="Run an HMC chain on a cloud TPU")
 cmd_args_utils.add_common_flags(parser)
@@ -118,16 +114,16 @@ def train_model():
   # manually convert all params to dtype
   params = jax.tree_map(lambda p: p.astype(dtype), params)
   
-  param_types = tree_utils._get_types(params)
+  param_types = tree_utils.tree_get_types(params)
   assert all([p_type == dtype for p_type in param_types]), (
     "Params data types {} do not match specified data type {}".format(
       param_types, dtype))
     
   trajectory_len = args.trajectory_len
 
-  log_likelihood_fn = nn_loss.make_xent_log_likelihood(
+  log_likelihood_fn = losses.make_xent_log_likelihood(
     num_classes, args.temperature)
-  log_prior_fn, log_prior_diff_fn = nn_loss.make_gaussian_log_prior(
+  log_prior_fn, log_prior_diff_fn = losses.make_gaussian_log_prior(
     args.weight_decay, args.temperature)
 
   update, get_log_prob_and_grad, evaluate = train_utils.make_hmc_update(
@@ -142,7 +138,7 @@ def train_model():
     "log_prob data type {} does not match specified data type {}".format(
         log_prob.dtype, dtype))
 
-  grad_types = tree_utils._get_types(state_grad)
+  grad_types = tree_utils.tree_get_types(state_grad)
   assert all([g_type == dtype for g_type in grad_types]), (
     "Gradient data types {} do not match specified data type {}".format(
       grad_types, dtype))
@@ -173,56 +169,27 @@ def train_model():
         iteration, params, net_state, key, step_size, accepted, num_ensembled,
         ensemble_predicted_probs)
     checkpoint_utils.save_checkpoint(checkpoint_path, checkpoint_dict)
+      
+    test_stats = evaluate(params, net_state, test_set)
+    train_stats = evaluate(params, net_state, train_set)
+    del test_stats["prior"]
+    tabulate_dict = logging_utils.make_common_logs(
+        tf_writer, iteration, iteration_time, train_stats, test_stats)
 
     if ((not in_burnin) and accepted) or args.no_mh:
-      ensemble_predicted_probs, ensemble_acc, num_ensembled = (
-          train_utils.update_ensemble(
+      ensemble_predicted_probs, num_ensembled, ensemble_stats = (
+          ensemble_utils.update_ensemble_classification(
               net_apply, params, net_state, test_set, num_ensembled,
               ensemble_predicted_probs))
-      
-    test_log_prob, test_acc, test_ce, _ = evaluate(params, net_state, test_set)
-    train_log_prob, train_acc, train_ce, prior = (
-        evaluate(params, net_state, train_set))
-      
-    tabulate_dict = OrderedDict()
-    tabulate_dict["iteration"] = iteration
-    tabulate_dict["step_size"] = step_size
-    tabulate_dict["train_logprob"] = log_prob
-    tabulate_dict["train_acc"] = train_acc
-    tabulate_dict["test_acc"] = test_acc
-    tabulate_dict["test_ce"] = test_ce
+      logging_utils.add_ensemle_logs(
+          tf_writer, tabulate_dict, ensemble_stats, iteration)
+
     tabulate_dict["accept_prob"] = accept_prob
     tabulate_dict["accepted"] = accepted
-    tabulate_dict["ensemble_acc"] = ensemble_acc
-    tabulate_dict["n_ens"] = num_ensembled
-    tabulate_dict["time"] = iteration_time
 
     with tf_writer.as_default():
-      tf.summary.scalar("train/log_prob", train_log_prob, step=iteration)
-      tf.summary.scalar("test/log_prob", test_log_prob, step=iteration)
-      tf.summary.scalar("train/log_likelihood", train_ce, step=iteration)
-      tf.summary.scalar("test/log_likelihood", test_ce, step=iteration)
-      tf.summary.scalar("train/accuracy", train_acc, step=iteration)
-      tf.summary.scalar("test/accuracy", test_acc, step=iteration)
-      tf.summary.scalar("test/ens_accuracy", ensemble_acc, step=iteration)
-      tf.summary.scalar("test/ens_accuracy", ensemble_acc, step=iteration)
-      tf.summary.scalar("test/ens_accuracy", ensemble_acc, step=iteration)
-      
-      if num_ensembled > 0:
-        test_labels = onp.asarray(test_set[1])
-        ensemble_nll = metrics.nll(ensemble_predicted_probs, test_labels)
-        ensemble_calibration = metrics.calibration_curve(
-            ensemble_predicted_probs, test_labels)
-        tf.summary.scalar(
-            "test/ens_ece", ensemble_calibration["ece"], step=iteration)
-        tf.summary.scalar("test/ens_nll", ensemble_nll, step=iteration)
-
-      tf.summary.scalar("telemetry/log_prior", prior, step=iteration)
       tf.summary.scalar("telemetry/accept_prob", accept_prob, step=iteration)
       tf.summary.scalar("telemetry/accepted", accepted, step=iteration)
-      tf.summary.scalar("telemetry/n_ens", num_ensembled, step=iteration)
-      tf.summary.scalar("telemetry/iteration_time", iteration_time,
-                        step=iteration)
       
       tf.summary.scalar("hypers/step_size", step_size, step=iteration)
       tf.summary.scalar("hypers/trajectory_len", trajectory_len,
@@ -236,11 +203,8 @@ def train_model():
                         step=iteration)
       tf.summary.scalar("debug/in_burnin", float(in_burnin),
                         step=iteration)
-      
-      
-      
 
-    table = tabulate_utils.make_table(
+    table = logging_utils.make_table(
       tabulate_dict, iteration - start_iteration, args.tabulate_freq)
     print(table)
 

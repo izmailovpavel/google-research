@@ -22,20 +22,9 @@ import tensorflow.compat.v2 as tf
 import argparse
 import time
 import numpy as onp
-from collections import OrderedDict
 
-from bnn_hmc import data
-from bnn_hmc import models
-from bnn_hmc import nn_loss
-from bnn_hmc import train_utils
-from bnn_hmc import tree_utils
-from bnn_hmc import checkpoint_utils
-from bnn_hmc import cmd_args_utils
-from bnn_hmc import tabulate_utils
-from bnn_hmc import sgmcmc
-from bnn_hmc import metrics
-from bnn_hmc import precision_utils
-
+from core import data, losses, sgmcmc, models
+from utils import checkpoint_utils, cmd_args_utils, logging_utils, precision_utils, train_utils, tree_utils, metrics
 
 parser = argparse.ArgumentParser(description="Run SGD on a cloud TPU")
 cmd_args_utils.add_common_flags(parser)
@@ -78,9 +67,9 @@ def train_model():
   net_apply, net_init = models.get_model(args.model_name, num_classes)
   net_apply = precision_utils.rewrite_high_precision(net_apply)
   
-  log_likelihood_fn = nn_loss.make_xent_log_likelihood(
+  log_likelihood_fn = losses.make_xent_log_likelihood(
       num_classes, args.temperature)
-  log_prior_fn, _ = nn_loss.make_gaussian_log_prior(
+  log_prior_fn, _ = losses.make_gaussian_log_prior(
       args.weight_decay, args.temperature)
   
   num_data = jnp.size(train_set[1])
@@ -203,7 +192,7 @@ def train_model():
         tf.summary.scalar("test/ens_nll", ensemble_nll, step=iteration)
         tf.summary.scalar("debug/n_ens", num_ensembled, step=iteration)
     
-    table = tabulate_utils.make_table(
+    table = logging_utils.make_table(
       tabulate_dict, iteration - start_iteration, args.tabulate_freq)
     print(table)
 

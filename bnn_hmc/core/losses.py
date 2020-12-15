@@ -15,19 +15,24 @@
 
 """Likelihood and prior functions."""
 import math
-from typing import Callable, Tuple
 
 import jax
 import jax.numpy as jnp
 
-from bnn_hmc import tree_utils
+from bnn_hmc.utils import tree_utils
 
 
-# Batch = Tuple[onp.ndarray, onp.ndarray]
-# LossAcc = Tuple[jnp.ndarray, jnp.ndarray]
-# LossAccGrad = Tuple[jnp.ndarray, jnp.ndarray, hk.Params]
-# PriorFn = Callable[[hk.Params], jnp.array]
-# LikelihoodFn = Callable[[hk.Transformed, hk.Params, Batch], LossAcc]
+def make_likelihood(num_classes, temperature):
+  """Creates negative log-likelihood.
+  
+  If num_classes is None, creates regression loss. Otherwise, creates
+  cross-entropy classification loss.
+  """
+  if num_classes:
+    return make_xent_log_likelihood(num_classes, temperature)
+  else:
+    return make_gaussian_likelihood(temperature)
+
 
 def make_xent_log_likelihood(num_classes, temperature):
   def xent_log_likelihood(net_apply, params, net_state, batch, is_training):
@@ -38,7 +43,10 @@ def make_xent_log_likelihood(num_classes, temperature):
     softmax_xent = jnp.sum(labels * jax.nn.log_softmax(logits)) / temperature
   
     accuracy = jnp.mean(jnp.argmax(logits, axis=-1) == y)
-    return softmax_xent, (accuracy, net_state)
+    statistics = {
+      "accuracy": accuracy
+    }
+    return softmax_xent, (statistics, net_state)
   return xent_log_likelihood
 
 
@@ -60,7 +68,7 @@ def make_gaussian_log_prior(weight_decay, temperature):
   return log_prior, log_prior_diff
 
 
-def make_gaussian_likelihood(noise_std=None):
+def make_gaussian_likelihood(temperature, noise_std=None):
   def gaussian_log_likelihood(net_apply, params, net_state, batch, is_training):
     """Computes the negative log-likelihood."""
     _, y = batch
@@ -72,11 +80,15 @@ def make_gaussian_likelihood(noise_std=None):
     else:
       predictions_std = noise_std
       
-    mse = (predictions - y)**2
-    mse /= predictions_std**2
-    log_likelihood = -jnp.sum(mse)
+    se = (predictions - y)**2
+    log_likelihood = -jnp.sum(se / (2 * predictions_std ** 2)) / temperature
     
-    statistics = jnp.mean(mse)
+    mse = jnp.mean(se)
+    
+    statistics = {
+      "mean_squared_error": mse
+    }
+    
     
     return log_likelihood, (statistics, net_state)
   return gaussian_log_likelihood

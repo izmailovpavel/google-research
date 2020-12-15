@@ -21,8 +21,6 @@ import jax
 import jax.numpy as jnp
 
 
-
-
 Batch = Tuple[jnp.ndarray, jnp.ndarray]
 _DEFAULT_BN_CONFIG = {
   'decay_rate': 0.9,
@@ -198,7 +196,7 @@ def make_mlp(layer_dims, output_dim):
   return forward
 
 
-def make_mlp_regression(output_dim=1, layer_dims=[100, 100]):
+def make_mlp_regression(output_dim=2, layer_dims=[100, 100]):
   return make_mlp(layer_dims, output_dim)
 
 

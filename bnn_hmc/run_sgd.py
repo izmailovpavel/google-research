@@ -23,14 +23,8 @@ import argparse
 import time
 from collections import OrderedDict
 
-from bnn_hmc import data
-from bnn_hmc import models
-from bnn_hmc import nn_loss
-from bnn_hmc import train_utils
-from bnn_hmc import checkpoint_utils
-from bnn_hmc import cmd_args_utils
-from bnn_hmc import tabulate_utils
-
+from core import data, losses, models
+from utils import checkpoint_utils, cmd_args_utils, logging_utils, train_utils
 
 parser = argparse.ArgumentParser(description="Run SGD on a cloud TPU")
 cmd_args_utils.add_common_flags(parser)
@@ -65,9 +59,11 @@ def train_model():
   
   net_apply, net_init = models.get_model(args.model_name, num_classes)
   
-  log_likelihood_fn = nn_loss.make_xent_log_likelihood(num_classes, 1.)
+  if num_classes:
+    log_likelihood_fn = losses.make_xent_log_likelihood(num_classes, 1.)
+    
   log_prior_fn, _ = (
-    nn_loss.make_gaussian_log_prior(args.weight_decay, 1.))
+    losses.make_gaussian_log_prior(args.weight_decay, 1.))
 
   num_data = jnp.size(train_set[1])
   num_batches = num_data // args.batch_size
@@ -132,9 +128,9 @@ def train_model():
       checkpoint_utils.save_checkpoint(checkpoint_path, checkpoint_dict)
     
     if (iteration % args.eval_freq == 0) or (iteration == args.num_epochs - 1):
-      test_log_prob, test_acc, test_ce, _ = evaluate(params, net_state,
+      test_log_prob, test_stats, test_ce, _ = evaluate(params, net_state,
                                                      test_set)
-      train_log_prob, train_acc, train_ce, prior = (
+      train_log_prob, train_stats, train_ce, prior = (
         evaluate(params, net_state, train_set))
       
       tabulate_dict["train_logprob"] = train_log_prob
@@ -150,7 +146,7 @@ def train_model():
         tf.summary.scalar("train/accuracy", train_acc, step=iteration)
         tf.summary.scalar("test/accuracy", test_acc, step=iteration)
     
-    table = tabulate_utils.make_table(
+    table = logging_utils.make_table(
         tabulate_dict, iteration - start_iteration, args.tabulate_freq)
     print(table)
 

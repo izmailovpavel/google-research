@@ -7,12 +7,8 @@ import numpy as onp
 import argparse
 from jax.experimental.callback import rewrite
 
-from bnn_hmc import data
-from bnn_hmc import models
-from bnn_hmc import nn_loss
-from bnn_hmc import precision_utils
-from bnn_hmc import train_utils
-from bnn_hmc import hmc
+from core import data, losses, hmc, models
+from utils import precision_utils, train_utils
 
 parser = argparse.ArgumentParser("Unit tests for BNN HMC code.")
 parser.add_argument("--tpu_ip", type=str, default="10.0.0.2",
@@ -44,8 +40,8 @@ class TestHMC(unittest.TestCase):
         models.lenet_fn,
         precision_utils.HIGH_PRECISION_RULES)
     net_highprec = hk.transform(net_fn_highprec)
-    predictions = nn_loss.pmap_get_softmax_predictions(net, params, test_set, 1)
-    predictions_highprec = nn_loss.pmap_get_softmax_predictions(
+    predictions = losses.pmap_get_softmax_predictions(net, params, test_set, 1)
+    predictions_highprec = losses.pmap_get_softmax_predictions(
         net_highprec, params, test_set, 1)
     predictions_dist = jnp.sqrt(
         jnp.sum((predictions - predictions_highprec)**2))
@@ -54,8 +50,8 @@ class TestHMC(unittest.TestCase):
   def test_no_randomness_in_predictions(self):
     """Test that computing predictions twice gives the same results."""
     net, params, _, test_set, _, _ = self._prepare()
-    predictions = nn_loss.pmap_get_softmax_predictions(net, params, test_set, 1)
-    predictions2 = nn_loss.pmap_get_softmax_predictions(net, params, test_set, 1)
+    predictions = losses.pmap_get_softmax_predictions(net, params, test_set, 1)
+    predictions2 = losses.pmap_get_softmax_predictions(net, params, test_set, 1)
     predictions_dist = jnp.sqrt(jnp.sum((predictions - predictions2) ** 2))
     self.assertLess(predictions_dist, 1e-6)
   
@@ -65,7 +61,7 @@ class TestHMC(unittest.TestCase):
     net, params, _, _, init_data, init_key = self._prepare()
     init_key, = jax.random.split(init_key, 1)
     params2 = net.init(init_key, init_data)
-    _, prior_diff_fn = nn_loss.make_gaussian_log_prior(
+    _, prior_diff_fn = losses.make_gaussian_log_prior(
         weight_decay=weight_decay)
 
     def prior_diff_onp_fn(params1, params2):
@@ -81,9 +77,9 @@ class TestHMC(unittest.TestCase):
       """Test log-prob fn constructed by train_utils."""
       weight_decay = 30.
       net, params, train_set, test_set, _, _ = self._prepare()
-      log_likelihood_fn = nn_loss.xent_log_likelihood
+      log_likelihood_fn = losses.xent_log_likelihood
       log_prior_fn, log_prior_diff = (
-          nn_loss.make_gaussian_log_prior(weight_decay=weight_decay))
+          losses.make_gaussian_log_prior(weight_decay=weight_decay))
 
       def get_log_prob(dataset):
         _, _, fn = (
@@ -122,9 +118,9 @@ class TestHMC(unittest.TestCase):
     # Rescale parameters so accept_prob is not 0 or 1.
     params, params2 = jax.tree_map(lambda p: p * 1e-2, [params, params2])
 
-    log_likelihood_fn = nn_loss.xent_log_likelihood
+    log_likelihood_fn = losses.xent_log_likelihood
     log_prior_fn, log_prior_diff = (
-        nn_loss.make_gaussian_log_prior(weight_decay=weight_decay))
+        losses.make_gaussian_log_prior(weight_decay=weight_decay))
     _, _, log_prob_and_grad_fn = (
       train_utils.make_hmc_update_eval_fns(
         net, train_set, test_set, log_likelihood_fn, log_prior_fn,

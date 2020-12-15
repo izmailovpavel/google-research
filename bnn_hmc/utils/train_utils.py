@@ -25,9 +25,8 @@ import numpy as onp
 import functools
 from jax.config import config
 
-from bnn_hmc import hmc
-from bnn_hmc import tree_utils
-
+from bnn_hmc.core import hmc
+from bnn_hmc.utils import tree_utils
 
 LRSchedule = Callable[[jnp.ndarray], jnp.ndarray]
 Opt = optix.GradientTransformation
@@ -117,15 +116,20 @@ def _make_eval_fn(likelihood_prior_and_acc_fn):
     jax.pmap, axis_name='i', in_axes=(None, 0, 0)
   )
   def pmap_eval(params, net_state, dataset):
-    likelihood, prior, acc, _ = likelihood_prior_and_acc_fn(
+    likelihood, prior, stats, _ = likelihood_prior_and_acc_fn(
       params, net_state, dataset, is_training=False)
     likelihood = jax.lax.psum(likelihood, axis_name='i')
     log_prob = likelihood + prior
-    acc = jax.lax.pmean(acc, axis_name='i')
-    return log_prob, acc, likelihood, prior
+    stats = {
+      key: jax.lax.pmean(val, axis_name='i') for key, val in stats.items()}
+    stats["likelihood"] = likelihood
+    stats["prior"] = prior
+    stats["log_prob"] = log_prob
+    return stats
   
   def evaluate(params, net_state, dataset):
-    return (arr[0] for arr in pmap_eval(params, net_state, dataset))
+    stats = pmap_eval(params, net_state, dataset)
+    return {key: val[0] for key, val in stats.items()}
   
   return evaluate
 
@@ -282,20 +286,3 @@ def get_softmax_predictions(
   _, predictions = jax.lax.scan(get_batch_predictions, net_state, dataset)
 
   return predictions
-
-
-def update_ensemble(
-    net_apply, params, net_state, test_set, num_ensembled,
-    ensemble_predicted_probs
-):
-  predicted_probs = onp.asarray(get_softmax_predictions(
-      net_apply, params, net_state, test_set, 1, False))
-  if num_ensembled:
-    new_ensemble_predicted_probs = (
-        ensemble_predicted_probs +
-        (predicted_probs - ensemble_predicted_probs) / (num_ensembled + 1))
-  else:
-    new_ensemble_predicted_probs = predicted_probs
-  ensemble_preds = onp.argmax(new_ensemble_predicted_probs, -1)[:, 0]
-  ensemble_acc = (ensemble_preds == test_set[1]).mean()
-  return new_ensemble_predicted_probs, ensemble_acc, num_ensembled + 1

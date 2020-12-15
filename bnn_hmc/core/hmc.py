@@ -18,9 +18,8 @@
 
 import jax
 import jax.numpy as jnp
-import tqdm
 
-from bnn_hmc import tree_utils
+from bnn_hmc.utils import tree_utils
 
 
 def make_leapfrog(log_prob_and_grad):
