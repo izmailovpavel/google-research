@@ -23,12 +23,21 @@ from collections import OrderedDict
 def make_table(tabulate_dict, iteration, header_freq):
   table = tabulate.tabulate(
       [tabulate_dict.values()], tabulate_dict.keys(), tablefmt='simple',
-      floatfmt='8.7f')
+      floatfmt='8.4f')
+  table_split = table.split('\n')
   if iteration % header_freq == 0:
-    table = table.split('\n')
-    table = '\n'.join([table[1]] + table)
+    table = '\n'.join([table_split[1]] + table_split)
   else:
-    table = table.split('\n')[2]
+    table = table_split[2]
+  return table
+
+
+def make_header(tabulate_dict):
+  table = tabulate.tabulate(
+      [tabulate_dict.values()], tabulate_dict.keys(), tablefmt='simple',
+      floatfmt='8.4f')
+  table_split = table.split('\n')
+  table = '\n'.join([table_split[1]] + table_split[:2])
   return table
 
 
@@ -59,3 +68,4 @@ def add_ensemle_logs(tf_writer, tabulate_dict, ensemble_stats, iteration):
     for key, val in ensemble_stats.items():
       tabulate_dict["ens_{}".format(key)] = val
       tf.summary.scalar("ensemble/{}".format(key), val, step=iteration)
+  return tabulate_dict

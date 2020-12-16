@@ -200,11 +200,13 @@ def make_mlp_regression(output_dim=2, layer_dims=[100, 100]):
   return make_mlp(layer_dims, output_dim)
 
 
-def make_mlp_classification(num_classes, layer_dims=[256, 256]):
+def make_mlp_classification(
+    num_classes, layer_dims=[256, 256]
+):
   return make_mlp(layer_dims, num_classes)
 
   
-def get_model(model_name, num_classes):
+def get_model(model_name, *args, **kwargs):
   _MODEL_FNS = {
     "lenet": make_lenet_fn,
     "resnet20": make_resnet20_fn,
@@ -214,7 +216,6 @@ def get_model(model_name, num_classes):
     "mlp_regression": make_mlp_regression,
     "mlp_classification": make_mlp_classification
   }
-  net_fn = _MODEL_FNS[model_name](num_classes)
+  net_fn = _MODEL_FNS[model_name](*args, **kwargs)
   net = hk.transform_with_state(net_fn)
-  net_apply = net.apply
-  return net_apply, net.init
+  return net.apply, net.init

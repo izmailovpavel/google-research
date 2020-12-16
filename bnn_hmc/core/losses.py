@@ -34,11 +34,12 @@ def make_likelihood(num_classes, temperature):
     return make_gaussian_likelihood(temperature)
 
 
-def make_xent_log_likelihood(num_classes, temperature):
+def make_xent_log_likelihood(temperature):
   def xent_log_likelihood(net_apply, params, net_state, batch, is_training):
     """Computes the negative log-likelihood."""
     _, y = batch
     logits, net_state = net_apply(params, net_state, None, batch, is_training)
+    num_classes = logits.shape[-1]
     labels = jax.nn.one_hot(y, num_classes)
     softmax_xent = jnp.sum(labels * jax.nn.log_softmax(logits)) / temperature
   
@@ -68,27 +69,42 @@ def make_gaussian_log_prior(weight_decay, temperature):
   return log_prior, log_prior_diff
 
 
-def make_gaussian_likelihood(temperature, noise_std=None):
+def preprocess_network_outputs_gaussian(predictions):
+  """Apply softplus to std output if available.
+
+  Returns predictive mean and standard deviation.
+  """
+  predictions_mean, predictions_std = jnp.split(predictions, [1], axis=-1)
+  predictions_std = jax.nn.softplus(predictions_std)
+  return jnp.concatenate([predictions_mean, predictions_std], axis=-1)
+
+
+def make_gaussian_likelihood(temperature):
   def gaussian_log_likelihood(net_apply, params, net_state, batch, is_training):
-    """Computes the negative log-likelihood."""
+    """Computes the negative log-likelihood.
+
+    The outputs of the network should be two-dimensional.
+    The first output is treated as predictive mean. The second output is treated
+    as inverse-softplus of the predictive standard deviation.
+    """
     _, y = batch
     predictions, net_state = net_apply(
         params, net_state, None, batch, is_training)
-    
-    if noise_std is None:
-      predictions, predictions_std = jnp.split(predictions, [1], axis=-1)
-    else:
-      predictions_std = noise_std
+
+    predictions = preprocess_network_outputs_gaussian(predictions)
+    predictions_mean, predictions_std = jnp.split(predictions, [1], axis=-1)
+    tempered_std = predictions_std * jnp.sqrt(temperature)
       
     se = (predictions - y)**2
-    log_likelihood = -jnp.sum(se / (2 * predictions_std ** 2)) / temperature
-    
+    log_likelihood = (-0.5 * (se / tempered_std ** 2)
+                      - 0.5 * jnp.log(tempered_std**2 * 2 * math.pi))
+    log_likelihood = jnp.sum(log_likelihood)
     mse = jnp.mean(se)
     
     statistics = {
-      "mean_squared_error": mse
+      "mse": mse,
+      "nll": -log_likelihood / len(y)
     }
-    
     
     return log_likelihood, (statistics, net_state)
   return gaussian_log_likelihood

@@ -84,7 +84,7 @@ def initialize(dirname, init_checkpoint):
 
 def make_hmc_checkpoint_dict(
     iteration, params, state, key, step_size, accepted, num_ensembled,
-    ensemble_predicted_probs
+    ensemble_predictions
 ):
   checkpoint_dict = {
     "iteration": iteration,
@@ -94,7 +94,7 @@ def make_hmc_checkpoint_dict(
     "step_size": step_size,
     "accepted": accepted,
     "num_ensembled": num_ensembled,
-    "ensemble_predicted_probs": ensemble_predicted_probs
+    "ensemble_predictions": ensemble_predictions
   }
   return checkpoint_dict
 
@@ -109,7 +109,7 @@ def parse_hmc_checkpoint_dict(checkpoint_dict):
     if key not in checkpoint_dict.keys():
       checkpoint_dict[key] = None
   field_names = ["iteration", "params", "state", "key", "step_size", "accepted",
-                 "num_ensembled", "ensemble_predicted_probs"]
+                 "num_ensembled", "ensemble_predictions"]
   return [checkpoint_dict[name] for name in field_names]
 
 
@@ -133,7 +133,7 @@ def parse_sgd_checkpoint_dict(checkpoint_dict):
 
 def make_sgmcmc_checkpoint_dict(
     iteration, params, net_state, opt_state, key, num_ensembled,
-    ensemble_predicted_probs
+    ensemble_predictions
 ):
   checkpoint_dict = {
     "iteration": iteration,
@@ -142,12 +142,12 @@ def make_sgmcmc_checkpoint_dict(
     "opt_state": opt_state,
     "key": key,
     "num_ensembled": num_ensembled,
-    "ensemble_predicted_probs": ensemble_predicted_probs
+    "ensemble_predictions": ensemble_predictions
   }
   return checkpoint_dict
 
 
 def parse_sgmcmc_checkpoint_dict(checkpoint_dict):
   field_names = ["iteration", "params", "net_state", "opt_state", "key",
-                 "num_ensembled", "ensemble_predicted_probs"]
+                 "num_ensembled", "ensemble_predictions"]
   return [checkpoint_dict[name] for name in field_names]

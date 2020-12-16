@@ -77,10 +77,10 @@ def train_model():
   num_devices = len(jax.devices())
 
   dtype = jnp.float64 if args.use_float64 else jnp.float32
-  train_set, test_set, num_classes = data.make_ds_pmap_fullbatch(
+  train_set, test_set, task, model_kwargs = data.make_ds_pmap_fullbatch(
     args.dataset_name, dtype)
 
-  net_apply, net_init = models.get_model(args.model_name, num_classes)
+  net_apply, net_init = models.get_model(args.model_name, **model_kwargs)
   
   checkpoint_dict, status = checkpoint_utils.initialize(
       dirname, args.init_checkpoint)
@@ -88,14 +88,14 @@ def train_model():
   if status == checkpoint_utils.InitStatus.LOADED_PREEMPTED:
     print("Continuing the run from the last saved checkpoint")
     (start_iteration, params, net_state, key, step_size, _, num_ensembled,
-     ensemble_predicted_probs) = (
+     ensemble_predictions) = (
         checkpoint_utils.parse_hmc_checkpoint_dict(checkpoint_dict))
     
   else:
     key, net_init_key = jax.random.split(jax.random.PRNGKey(args.seed), 2)
     start_iteration = 0
     num_ensembled = 0
-    ensemble_predicted_probs = None
+    ensemble_predictions = None
     step_size = args.step_size
     
     if status == checkpoint_utils.InitStatus.INIT_CKPT:
@@ -121,8 +121,9 @@ def train_model():
     
   trajectory_len = args.trajectory_len
 
-  log_likelihood_fn = losses.make_xent_log_likelihood(
-    num_classes, args.temperature)
+  likelihood_factory, ensemble_upd_fn = (
+      train_utils.get_task_specific_fns(task))
+  log_likelihood_fn = likelihood_factory(args.temperature)
   log_prior_fn, log_prior_diff_fn = losses.make_gaussian_log_prior(
     args.weight_decay, args.temperature)
 
@@ -143,7 +144,7 @@ def train_model():
     "Gradient data types {} do not match specified data type {}".format(
       grad_types, dtype))
 
-  ensemble_acc = 0
+  tabulate_full_header_printed = False
   
   for iteration in range(start_iteration, args.num_iterations):
     
@@ -167,25 +168,27 @@ def train_model():
     checkpoint_path = os.path.join(dirname, checkpoint_name)
     checkpoint_dict = checkpoint_utils.make_hmc_checkpoint_dict(
         iteration, params, net_state, key, step_size, accepted, num_ensembled,
-        ensemble_predicted_probs)
+        ensemble_predictions)
     checkpoint_utils.save_checkpoint(checkpoint_path, checkpoint_dict)
-      
+
     test_stats = evaluate(params, net_state, test_set)
     train_stats = evaluate(params, net_state, train_set)
     del test_stats["prior"]
     tabulate_dict = logging_utils.make_common_logs(
         tf_writer, iteration, iteration_time, train_stats, test_stats)
 
-    if ((not in_burnin) and accepted) or args.no_mh:
-      ensemble_predicted_probs, num_ensembled, ensemble_stats = (
-          ensemble_utils.update_ensemble_classification(
-              net_apply, params, net_state, test_set, num_ensembled,
-              ensemble_predicted_probs))
-      logging_utils.add_ensemle_logs(
-          tf_writer, tabulate_dict, ensemble_stats, iteration)
-
     tabulate_dict["accept_prob"] = accept_prob
     tabulate_dict["accepted"] = accepted
+
+    if ((not in_burnin) and accepted) or args.no_mh:
+      ensemble_predictions, num_ensembled, ensemble_stats = (ensemble_upd_fn(
+          net_apply, params, net_state, test_set, num_ensembled,
+          ensemble_predictions))
+      tabulate_dict = logging_utils.add_ensemle_logs(
+          tf_writer, tabulate_dict, ensemble_stats, iteration)
+      if iteration > start_iteration and not tabulate_full_header_printed:
+        print(logging_utils.make_header(tabulate_dict))
+      tabulate_full_header_printed = True
 
     with tf_writer.as_default():
       tf.summary.scalar("telemetry/accept_prob", accept_prob, step=iteration)

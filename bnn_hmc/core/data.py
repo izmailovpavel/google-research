@@ -28,6 +28,12 @@ from enum import Enum
 import re
 import os
 import warnings
+from enum import Enum
+
+
+class Task(Enum):
+  REGRESSION = "regression"
+  CLASSIFICATION = "classification"
 
 
 class ImgDatasets(Enum):
@@ -173,6 +179,7 @@ def load_uci_regression_dataset(
   
   indices = jax.random.permutation(jax.random.PRNGKey(split_seed), len(x))
   indices = onp.asarray(indices)
+  x, y = x[indices], y[indices]
   
   n_train = int(train_fraction * len(x))
   x_train, y_train = x[:n_train], y[:n_train]
@@ -183,7 +190,7 @@ def load_uci_regression_dataset(
   x_test = normalize_with_stats(x_test, x_mean, x_std)
   y_test = normalize_with_stats(y_test, y_mean, y_std)
   
-  return (x_train, y_train), (x_test, y_test), None, None
+  return (x_train, y_train), (x_test, y_test)
 
 
 def _parse_uci_regression_dataset(name_str):
@@ -230,24 +237,30 @@ def pmap_dataset(ds, n_devices=None):
 def make_ds_pmap_fullbatch(name, dtype, n_devices=None):
   """Make train and test sets sharded over batch dim."""
   name = name.lower()
-  loaded = False
   if name in ImgDatasets._value2member_map_:
-    train_set, test_set, _, n_classes = get_image_dataset(name)
+    train_set, test_set, _, num_classes = get_image_dataset(name)
     loaded = True
+    task = Task.CLASSIFICATION
   elif name == "imdb":
-    train_set, test_set, _, n_classes = load_imdb_dataset()
+    train_set, test_set, _, num_classes = load_imdb_dataset()
     dtype = jnp.int32
     loaded = True
+    task = Task.CLASSIFICATION
   else:
     name, seed = _parse_uci_regression_dataset(name)
     loaded = name is not None
     if name is not None:
-      train_set, test_set, _, _ = load_uci_regression_dataset(name, seed)
-      n_classes = None
+      train_set, test_set = load_uci_regression_dataset(name, int(seed))
       loaded = True
+      task = Task.REGRESSION
     
   if not loaded:
     raise ValueError("Unknown dataset name: {}".format(name))
+
+  if task == Task.CLASSIFICATION:
+    kwargs = {"num_classes": num_classes}
+  else:
+    kwargs = {}
 
   train_set, test_set = tuple(pmap_dataset(ds, n_devices)
                               for ds in (train_set, test_set))
@@ -255,4 +268,4 @@ def make_ds_pmap_fullbatch(name, dtype, n_devices=None):
   train_set, test_set = map(
       lambda ds: (ds[0].astype(dtype), ds[1]), (train_set, test_set))
   
-  return train_set, test_set, n_classes
+  return train_set, test_set, task, kwargs

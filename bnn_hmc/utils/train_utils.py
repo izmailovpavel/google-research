@@ -26,11 +26,10 @@ import functools
 from jax.config import config
 
 from bnn_hmc.core import hmc
+from bnn_hmc.core import data
+from bnn_hmc.core import losses
 from bnn_hmc.utils import tree_utils
-
-LRSchedule = Callable[[jnp.ndarray], jnp.ndarray]
-Opt = optix.GradientTransformation
-_CHECKPOINT_FORMAT_STRING = "model_step_{}.pt"
+from bnn_hmc.utils import ensemble_utils
 
 
 def set_up_jax(tpu_ip, use_float64):
@@ -66,6 +65,16 @@ def make_optimizer(lr_schedule, momentum_decay):
   # Maximize log-prob instead of minimizing loss
   return optix.chain(optix.trace(decay=momentum_decay, nesterov=False),
                      optix.scale_by_schedule(lr_schedule))
+
+
+def get_task_specific_fns(task):
+  if task == data.Task.CLASSIFICATION:
+    likelihood_fn = losses.make_xent_log_likelihood
+    ensemble_fn = ensemble_utils.update_ensemble_classification
+  elif task == data.Task.REGRESSION:
+    likelihood_fn = losses.make_gaussian_likelihood
+    ensemble_fn = ensemble_utils.update_ensemble_regression
+  return likelihood_fn, ensemble_fn
 
 
 def _make_perdevice_likelihood_prior_acc_grad_fns(
@@ -264,25 +273,31 @@ def make_sgd_train_epoch(
   return sgd_train_epoch, _make_eval_fn(likelihood_prior_and_acc_fn)
 
 
-@functools.partial(
+def make_get_predictions(activation_fn):
+  @functools.partial(
     jax.pmap, axis_name='i', static_broadcasted_argnums=[0, 4, 5],
     in_axes=(None, None, 0, 0, None, None)
-)
-def get_softmax_predictions(
-    net_apply, params, net_state, dataset, num_batches=1, is_training=False
-):
-  """Compute predictions for a given network on a given dataset."""
-
-  batch_size = dataset[0].shape[0] // num_batches
-  dataset = jax.tree_map(
+  )
+  def get_predictions(
+      net_apply, params, net_state, dataset, num_batches=1, is_training=False
+  ):
+    batch_size = dataset[0].shape[0] // num_batches
+    dataset = jax.tree_map(
       lambda x: x.reshape((num_batches, batch_size, *x.shape[1:])), dataset)
 
-  def get_batch_predictions(current_net_state, x):
-    y, current_net_state = net_apply(
+    def get_batch_predictions(current_net_state, x):
+      y, current_net_state = net_apply(
         params, current_net_state, None, x, is_training)
-    batch_predictions = jax.nn.softmax(y)
-    return current_net_state, batch_predictions
+      batch_predictions = activation_fn(y)
+      return current_net_state, batch_predictions
 
-  _, predictions = jax.lax.scan(get_batch_predictions, net_state, dataset)
+    _, predictions = jax.lax.scan(get_batch_predictions, net_state, dataset)
+    predictions = predictions.reshape((
+        num_batches * batch_size, *predictions.shape[2:]))
+    return predictions
+  return get_predictions
 
-  return predictions
+
+get_softmax_predictions = make_get_predictions(jax.nn.softmax)
+get_regression_gaussian_predictions = make_get_predictions(
+    losses.preprocess_network_outputs_gaussian)
