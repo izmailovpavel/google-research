@@ -21,10 +21,15 @@ import jax
 import tensorflow.compat.v2 as tf
 import argparse
 import time
-from collections import OrderedDict
 
-from core import data, losses, models
-from utils import checkpoint_utils, cmd_args_utils, logging_utils, train_utils
+from bnn_hmc.core import data
+from bnn_hmc.core import losses
+from bnn_hmc.core import models
+from bnn_hmc.utils import checkpoint_utils
+from bnn_hmc.utils import cmd_args_utils
+from bnn_hmc.utils import logging_utils
+from bnn_hmc.utils import train_utils
+
 
 parser = argparse.ArgumentParser(description="Run SGD on a cloud TPU")
 cmd_args_utils.add_common_flags(parser)
@@ -54,16 +59,14 @@ def train_model():
   cmd_args_utils.save_cmd(dirname, tf_writer)
 
   dtype = jnp.float64 if args.use_float64 else jnp.float32
-  train_set, test_set, num_classes = data.make_ds_pmap_fullbatch(
+  train_set, test_set, task, model_kwargs = data.make_ds_pmap_fullbatch(
     args.dataset_name, dtype)
   
-  net_apply, net_init = models.get_model(args.model_name, num_classes)
-  
-  if num_classes:
-    log_likelihood_fn = losses.make_xent_log_likelihood(num_classes, 1.)
-    
-  log_prior_fn, _ = (
-    losses.make_gaussian_log_prior(args.weight_decay, 1.))
+  net_apply, net_init = models.get_model(args.model_name, **model_kwargs)
+
+  likelihood_factory, _ = train_utils.get_task_specific_fns(task)
+  log_likelihood_fn = likelihood_factory(args.temperature)
+  log_prior_fn, _ = losses.make_gaussian_log_prior(args.weight_decay, 1.)
 
   num_data = jnp.size(train_set[1])
   num_batches = num_data // args.batch_size
@@ -104,21 +107,6 @@ def train_model():
     params, net_state, opt_state, logprob_avg, key = sgd_train_epoch(
         params, net_state, opt_state, train_set, key)
     iteration_time = time.time() - start_time
-
-    tabulate_dict = OrderedDict()
-    tabulate_dict["iteration"] = iteration
-    tabulate_dict["step_size"] = lr_schedule(opt_state[-1].count)
-    tabulate_dict["train_logprob"] = logprob_avg
-    tabulate_dict["train_acc"] = None
-    tabulate_dict["test_logprob"] = None
-    tabulate_dict["test_acc"] = None
-    tabulate_dict["time"] = iteration_time
-    
-    with tf_writer.as_default():
-      tf.summary.scalar("train/log_prob_running", logprob_avg, step=iteration)
-      tf.summary.scalar("hypers/step_size", lr_schedule(opt_state[-1].count),
-                        step=iteration)
-      tf.summary.scalar("debug/iteration_time", iteration_time, step=iteration)
     
     if iteration % args.save_freq == 0 or iteration == args.num_epochs - 1:
       checkpoint_name = checkpoint_utils.make_checkpoint_name(iteration)
@@ -126,25 +114,21 @@ def train_model():
       checkpoint_dict = checkpoint_utils.make_sgd_checkpoint_dict(
           iteration, params, net_state, opt_state, key)
       checkpoint_utils.save_checkpoint(checkpoint_path, checkpoint_dict)
-    
+
+    train_stats = {"log_prob": logprob_avg}
+    test_stats = {}
+
     if (iteration % args.eval_freq == 0) or (iteration == args.num_epochs - 1):
-      test_log_prob, test_stats, test_ce, _ = evaluate(params, net_state,
-                                                     test_set)
-      train_log_prob, train_stats, train_ce, prior = (
-        evaluate(params, net_state, train_set))
-      
-      tabulate_dict["train_logprob"] = train_log_prob
-      tabulate_dict["test_logprob"] = test_log_prob
-      tabulate_dict["train_acc"] = train_acc
-      tabulate_dict["test_acc"] = test_acc
-      
-      with tf_writer.as_default():
-        tf.summary.scalar("train/log_prob", train_log_prob, step=iteration)
-        tf.summary.scalar("test/log_prob", test_log_prob, step=iteration)
-        tf.summary.scalar("train/log_likelihood", train_ce, step=iteration)
-        tf.summary.scalar("test/log_likelihood", test_ce, step=iteration)
-        tf.summary.scalar("train/accuracy", train_acc, step=iteration)
-        tf.summary.scalar("test/accuracy", test_acc, step=iteration)
+      test_stats = evaluate(params, net_state, test_set)
+      train_stats.update(evaluate(params, net_state, train_set))
+
+    tabulate_dict = logging_utils.make_common_logs(
+      tf_writer, iteration, iteration_time, train_stats, test_stats)
+    tabulate_dict["step_size"] = lr_schedule(opt_state[-1].count)
+
+    with tf_writer.as_default():
+      tf.summary.scalar("hypers/step_size", lr_schedule(opt_state[-1].count),
+                        step=iteration)
     
     table = logging_utils.make_table(
         tabulate_dict, iteration - start_iteration, args.tabulate_freq)

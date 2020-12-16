@@ -200,6 +200,10 @@ def make_mlp_regression(output_dim=2, layer_dims=[100, 100]):
   return make_mlp(layer_dims, output_dim)
 
 
+def make_mlp_regression_small():
+  return make_mlp([50], 2)
+
+
 def make_mlp_classification(
     num_classes, layer_dims=[256, 256]
 ):
@@ -214,6 +218,7 @@ def get_model(model_name, *args, **kwargs):
     "cnn_lstm": make_cnn_lstm,
     "smooth_cnn_lstm": make_smooth_cnn_lstm,
     "mlp_regression": make_mlp_regression,
+    "mlp_regression_small": make_mlp_regression_small,
     "mlp_classification": make_mlp_classification
   }
   net_fn = _MODEL_FNS[model_name](*args, **kwargs)
