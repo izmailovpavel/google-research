@@ -90,6 +90,5 @@ def regression_nlls(predictions, targets):
   #ToDo: check
   mus, sigmas = onp.split(predictions, [1], axis=-1)
   se = (mus - targets) ** 2
-  nll = -onp.mean(se / (2 * sigmas**2))
-  nll -= onp.mean(onp.log(2 * onp.pi * sigmas**2))
+  nll = 0.5 * (se / sigmas**2 + onp.log(2 * onp.pi * sigmas**2)).mean()
   return nll

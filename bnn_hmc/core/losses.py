@@ -95,8 +95,8 @@ def make_gaussian_likelihood(temperature):
     predictions_mean, predictions_std = jnp.split(predictions, [1], axis=-1)
     tempered_std = predictions_std * jnp.sqrt(temperature)
       
-    se = (predictions - y)**2
-    log_likelihood = (-0.5 * (se / tempered_std ** 2)
+    se = (predictions_mean - y)**2
+    log_likelihood = (-0.5 * se / tempered_std**2
                       - 0.5 * jnp.log(tempered_std**2 * 2 * math.pi))
     log_likelihood = jnp.sum(log_likelihood)
     mse = jnp.mean(se)

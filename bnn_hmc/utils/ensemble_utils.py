@@ -54,9 +54,9 @@ def compute_updated_ensemble_predictions_regression(
   if num_ensembled:
     old_mus, old_sigmas = onp.split(ensemble_predictions, [1], axis=-1)
     new_mus = running_average(old_mus, mus, num_ensembled)
-    old_sigmas_corrected = old_sigmas + old_mus ** 2 - new_mus ** 2
-    new_sigmas = running_average(
-      old_sigmas_corrected, sigmas + mus ** 2 - new_mus ** 2, num_ensembled)
+    old_sigmas_corrected = old_sigmas**2 + old_mus ** 2 - new_mus ** 2
+    new_sigmas = onp.sqrt(running_average(
+      old_sigmas_corrected, sigmas**2 + mus ** 2 - new_mus ** 2, num_ensembled))
     new_ensemble_predictions = onp.concatenate([new_mus, new_sigmas], axis=-1)
   else:
     new_ensemble_predictions = new_predictions
