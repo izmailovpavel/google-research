@@ -78,15 +78,19 @@ def calibration_curve(outputs, labels, num_bins=20):
       "ece": ece}
 
 
-def mse(predictions, targets):
+def mse(predictions, targets, y_scale=1.):
   mus, sigmas = onp.split(predictions, [1], axis=-1)
   assert mus.shape == targets.shape, (
     "Predictions and targets should have the same shape, "
     "got {} and {}".format(mus.shape, targets.shape))
-  return ((mus - targets)**2).mean()
+  return ((mus - targets)**2).mean() * y_scale**2
 
 
-def regression_nlls(predictions, targets):
+def rmse(predictions, targets, y_scale=1.):
+  return onp.sqrt(mse(predictions, targets, y_scale))
+
+
+def regression_nll(predictions, targets):
   #ToDo: check
   mus, sigmas = onp.split(predictions, [1], axis=-1)
   se = (mus - targets) ** 2

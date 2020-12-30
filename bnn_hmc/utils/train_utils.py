@@ -30,6 +30,7 @@ from bnn_hmc.core import data
 from bnn_hmc.core import losses
 from bnn_hmc.utils import tree_utils
 from bnn_hmc.utils import ensemble_utils
+from bnn_hmc.utils import metrics
 
 
 def set_up_jax(tpu_ip, use_float64):
@@ -67,14 +68,38 @@ def make_optimizer(lr_schedule, momentum_decay):
                      optix.scale_by_schedule(lr_schedule))
 
 
-def get_task_specific_fns(task):
+def get_task_specific_fns(task, task_kwargs):
   if task == data.Task.CLASSIFICATION:
     likelihood_fn = losses.make_xent_log_likelihood
     ensemble_fn = ensemble_utils.update_ensemble_classification
+    predict_fn = get_softmax_predictions
+    metrics_fns = {
+      "accuracy": metrics.accuracy,
+      "nll": metrics.nll,
+      "ece": lambda preds, y: metrics.calibration_curve(preds, y)["ece"]
+    }
+    tabulate_metrics = [
+      "train_accuracy", "test_accuracy", "test_nll",
+      "ensemble_accuracy", "ensemble_nll", "ensemble_ece"
+    ]
   elif task == data.Task.REGRESSION:
     likelihood_fn = losses.make_gaussian_likelihood
     ensemble_fn = ensemble_utils.update_ensemble_regression
-  return likelihood_fn, ensemble_fn
+    predict_fn = get_regression_gaussian_predictions
+
+    data_scale = task_kwargs["y_scale"]
+    metrics_fns = {
+      "nll": metrics.regression_nll,
+      "scaled_mse": metrics.mse,
+      "scaled_rmse": metrics.rmse,
+      "mse": lambda preds, y: metrics.mse(preds, y, data_scale),
+      "rmse": lambda preds, y: metrics.rmse(preds, y, data_scale),
+    }
+    tabulate_metrics = [
+      "train_rmse", "train_nll", "test_rmse", "test_nll",
+      "ensemble_rmse", "ensemble_nll"
+    ]
+  return likelihood_fn, predict_fn, ensemble_fn, metrics_fns, tabulate_metrics
 
 
 def _make_perdevice_likelihood_prior_acc_grad_fns(

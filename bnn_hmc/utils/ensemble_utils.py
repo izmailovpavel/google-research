@@ -8,7 +8,7 @@ def running_average(old_avg_val, new_val, n_avg):
   return new_avg_val
 
 
-def compute_updated_ensemble_predictions_classification(
+def _compute_updated_ensemble_predictions_classification(
     ensemble_predicted_probs, num_ensembled, new_predicted_probs
 ):
   """Update ensemble predictive categorical distribution."""
@@ -30,22 +30,13 @@ def update_ensemble_classification(
       net_apply, params, net_state, test_set, 1, False))
 
   new_ensemble_predicted_probs = (
-      compute_updated_ensemble_predictions_classification(
+      _compute_updated_ensemble_predictions_classification(
         ensemble_predicted_probs, num_ensembled, predicted_probs))
-  test_labels = test_set[1]
 
-  stats = {
-    "accuracy": metrics.accuracy(new_ensemble_predicted_probs, test_labels),
-    "nll": metrics.nll(new_ensemble_predicted_probs, test_labels),
-    "ece": metrics.calibration_curve(new_ensemble_predicted_probs,
-                                     test_labels)["ece"],
-    "num_samples": num_ensembled + 1
-  }
-
-  return new_ensemble_predicted_probs, num_ensembled + 1, stats
+  return new_ensemble_predicted_probs, num_ensembled + 1
 
 
-def compute_updated_ensemble_predictions_regression(
+def _compute_updated_ensemble_predictions_regression(
     ensemble_predictions, num_ensembled, new_predictions
 ):
   """Update ensemble predictive distribution assuming Gaussian likelihood."""
@@ -73,15 +64,7 @@ def update_ensemble_regression(
       net_apply, params, net_state, test_set, 1, False))
 
   new_ensemble_predictions = (
-      compute_updated_ensemble_predictions_regression(
+      _compute_updated_ensemble_predictions_regression(
         ensemble_predictions, num_ensembled, new_predictions))
-  test_targets = test_set[1]
 
-  stats = {
-    "mse_of_mean": metrics.mse(new_ensemble_predictions, test_targets),
-    "mse_of_mean": metrics.mse(new_ensemble_predictions, test_targets),
-    "nll": metrics.regression_nlls(new_ensemble_predictions, test_targets),
-    "num_samples": num_ensembled + 1
-  }
-
-  return new_ensemble_predictions, num_ensembled + 1, stats
+  return new_ensemble_predictions, num_ensembled + 1

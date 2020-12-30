@@ -64,7 +64,8 @@ def train_model():
   
   net_apply, net_init = models.get_model(args.model_name, **model_kwargs)
 
-  likelihood_factory, _ = train_utils.get_task_specific_fns(task)
+  likelihood_factory, predict_fn, _, metrics_fns, tabulate_metrics = (
+      train_utils.get_task_specific_fns(task))
   log_likelihood_fn = likelihood_factory(args.temperature)
   log_prior_fn, _ = losses.make_gaussian_log_prior(args.weight_decay, 1.)
 
@@ -119,6 +120,13 @@ def train_model():
     test_stats = {}
 
     if (iteration % args.eval_freq == 0) or (iteration == args.num_epochs - 1):
+      test_predictions = onp.asarray(predict_fn(
+          net_apply, params, net_state, test_set, 1, False))
+      train_predictions = onp.asarray(predict_fn(
+        net_apply, params, net_state, train_set, 1, False))
+      test_labels, train_labels = test_set[1], train_set[1]
+
+
       test_stats = evaluate(params, net_state, test_set)
       train_stats.update(evaluate(params, net_state, train_set))
 
