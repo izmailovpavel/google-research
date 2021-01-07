@@ -336,6 +336,15 @@ def main(argv):
       tf.keras.callbacks.CSVLogger(os.path.join(FLAGS.output_dir, 'logs.csv'))
   ])
 
+  # Checkpoint callback
+  ckpt_path = pathlib.Path.joinpath(
+        pathlib.Path(FLAGS.output_dir).parent, 
+        'ckpts_{}/'.format(FLAGS.experiment_id))
+  ckpt_path = pathlib.Path.joinpath(
+        ckpt_path, "weights.{epoch:02d}.hdf5") 
+  model_checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
+     ckpt_path, save_freq="epoch")
+
   # Keras train model
   metrics = [
       tf.keras.metrics.SparseCategoricalCrossentropy(
