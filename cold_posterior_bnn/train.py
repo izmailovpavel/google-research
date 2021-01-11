@@ -337,13 +337,16 @@ def main(argv):
   ])
 
   # Checkpoint callback
+  ckpt_dir = pathlib.Path.joinpath(
+      pathlib.Path(FLAGS.output_dir).parent, 
+      'ckpts_{}/'.format(FLAGS.experiment_id))
+  tf.io.gfile.makedirs(ckpt_dir)
   ckpt_path = pathlib.Path.joinpath(
-        pathlib.Path(FLAGS.output_dir).parent, 
-        'ckpts_{}/'.format(FLAGS.experiment_id))
-  ckpt_path = pathlib.Path.joinpath(
-        ckpt_path, "weights.{epoch:02d}.hdf5") 
+     ckpt_dir, "weights.{epoch:08d}.hdf5") 
   model_checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
-     ckpt_path, save_freq="epoch")
+     ckpt_path, save_weights_only=True, 
+     save_freq=steps_per_epoch*FLAGS.cycle_length)
+  callbacks.append(model_checkpoint_callback)
 
   # Keras train model
   metrics = [

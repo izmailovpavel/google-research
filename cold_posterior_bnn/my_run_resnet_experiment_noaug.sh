@@ -33,7 +33,7 @@ source ./bin/activate
 pip install -r cold_posterior_bnn/requirements.txt
 
 # Output directory for the results of experiments, string should end with '/'
-output_dir='cold_posterior_bnn/results_resnet/'
+output_dir='cold_posterior_bnn/results_resnet_bnnoaug_t01/'
 
 # Exeriment settings
 train_epochs=1500
@@ -47,9 +47,9 @@ cycle_start_sampling=150
 cycle_length=50
 
 # Hyperparameters to sweep
-num_runs=3  # Number of repeated runs per hyperparameter setting
-min_log_temp=0  # Minimal log_10 temperature of sweep
-max_log_temp=0  # Maximal log_10 temperature of sweep
+num_runs=1  # Number of repeated runs per hyperparameter setting
+min_log_temp=-1  # Minimal log_10 temperature of sweep
+max_log_temp=-1  # Maximal log_10 temperature of sweep
 step_temp=0.25  # step between temperatures in log_10 space
 
 # Generate parameter lists to sweep

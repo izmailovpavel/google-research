@@ -29,6 +29,7 @@ from __future__ import print_function
 import tensorflow as tf  # pylint: disable=g-explicit-tensorflow-version-import
 
 from cold_posterior_bnn.core import prior
+from cold_posterior_bnn.core import frn
 
 
 def bnn_scope():
@@ -72,7 +73,10 @@ def clone_model(model):
       model_cloned = tf.keras.models.clone_model(model)
     elif isinstance(model, tf.keras.Model):
 
-      model_cloned = model.__class__.from_config(model.get_config())
+      model_cloned = model.__class__.from_config(
+              model.get_config(),
+              custom_objects={"FRN": frn.FRN, "TLU": frn.TLU}
+            )
     else:
       raise ValueError('Unknown model type, cannot clone.')
 

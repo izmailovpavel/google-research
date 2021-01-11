@@ -33,7 +33,7 @@ source ./bin/activate
 pip install -r cold_posterior_bnn/requirements.txt
 
 # Output directory for the results of experiments, string should end with '/'
-output_dir='cold_posterior_bnn/results_resnet/'
+output_dir='cold_posterior_bnn/results_resnet_bnaug/'
 
 # Exeriment settings
 train_epochs=1500
@@ -53,11 +53,11 @@ max_log_temp=0  # Maximal log_10 temperature of sweep
 step_temp=0.25  # step between temperatures in log_10 space
 
 # Generate parameter lists to sweep
-seed_range=($(seq 1 $num_runs))
+seed_range=($(seq 4 1 $((4+$num_runs)) ))
 temp_range=($(seq $min_log_temp $step_temp $max_log_temp))
 
 # Run experiment binary
-experiment_id=-1
+experiment_id=3
 for seed in ${seed_range[@]}; do
   for log_temperature in ${temp_range[@]}; do
     experiment_id=$((experiment_id+1))
