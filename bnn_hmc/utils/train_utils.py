@@ -18,7 +18,7 @@
 from typing import Callable
 
 import jax
-from jax.experimental import optix
+import optax
 import jax.numpy as jnp
 import tensorflow.compat.v2 as tf
 import numpy as onp
@@ -64,8 +64,8 @@ def make_cosine_lr_schedule_with_burnin(
 def make_optimizer(lr_schedule, momentum_decay):
   """Make SGD optimizer with momentum."""
   # Maximize log-prob instead of minimizing loss
-  return optix.chain(optix.trace(decay=momentum_decay, nesterov=False),
-                     optix.scale_by_schedule(lr_schedule))
+  return optax.chain(optax.trace(decay=momentum_decay, nesterov=False),
+                     optax.scale_by_schedule(lr_schedule))
 
 
 def get_task_specific_fns(task, data_info):
@@ -292,7 +292,7 @@ def make_sgd_train_epoch(
       grad = jax.lax.psum(grad, axis_name='i')
       
       updates, opt_state_ = optimizer.update(grad, opt_state_)
-      params_ = optix.apply_updates(params_, updates)
+      params_ = optax.apply_updates(params_, updates)
       return (params_, net_state_, opt_state_), loss
     
     (params, net_state, opt_state), losses = jax.lax.scan(
@@ -313,13 +313,13 @@ def make_sgd_train_epoch(
   return sgd_train_epoch, _make_eval_fn(likelihood_prior_and_acc_fn)
 
 
-def make_get_predictions(activation_fn):
+def make_get_predictions(activation_fn, num_batches=1, is_training=False):
   @functools.partial(
-    jax.pmap, axis_name='i', static_broadcasted_argnums=[0, 4, 5],
-    in_axes=(None, None, 0, 0, None, None)
+    jax.pmap, axis_name='i', static_broadcasted_argnums=[0],
+    in_axes=(None, None, 0, 0,)
   )
   def get_predictions(
-      net_apply, params, net_state, dataset, num_batches=1, is_training=False
+      net_apply, params, net_state, dataset
   ):
     batch_size = dataset[0].shape[0] // num_batches
     dataset = jax.tree_map(

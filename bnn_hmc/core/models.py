@@ -30,7 +30,8 @@ _DEFAULT_BN_CONFIG = {
 }
 
 
-def make_lenet_fn(num_classes):
+def make_lenet_fn(data_info):
+  num_classes = data_info["num_classes"]
   def lenet_fn(batch, is_training):
     """Network inspired by LeNet-5."""
     x, _ = batch
@@ -134,23 +135,27 @@ def make_resnet_fn(
   return forward
 
 
-def make_resnet20_fn(num_classes):
+def make_resnet20_fn(data_info):
+  num_classes = data_info["num_classes"]
   def normalization_layer(): hk.BatchNorm(**_DEFAULT_BN_CONFIG)
   return make_resnet_fn(num_classes, depth=20,
                         normalization_layer=normalization_layer)
 
 
-def make_resnet20_frn_fn(num_classes):
+def make_resnet20_frn_fn(data_info):
+  num_classes = data_info["num_classes"]
   return make_resnet_fn(num_classes, depth=20,
                         normalization_layer=FeatureResponseNorm)
 
 
 def make_cnn_lstm(
-    num_classes, max_features=20000, embedding_size=128, cell_size=128,
+    data_info, max_features=20000, embedding_size=128, cell_size=128,
     num_filters=64, kernel_size=5, pool_size=4,
     use_swish=False, use_maxpool=True
 ):
   """CNN LSTM architecture for the IMDB dataset."""
+
+  num_classes = data_info["num_classes"]
   def forward(batch, is_training):
     x, _ = batch
     batch_size = x.shape[0]
@@ -177,9 +182,10 @@ def make_cnn_lstm(
 
 
 def make_smooth_cnn_lstm(
-    num_classes, max_features=20000, embedding_size=128, cell_size=128,
+    data_info, max_features=20000, embedding_size=128, cell_size=128,
     num_filters=64, kernel_size=5, pool_size=4
 ):
+  num_classes = data_info["num_classes"]
   return make_cnn_lstm(num_classes, max_features, embedding_size, cell_size,
     num_filters, kernel_size, pool_size, use_swish=True, use_maxpool=False)
 
@@ -196,21 +202,21 @@ def make_mlp(layer_dims, output_dim):
   return forward
 
 
-def make_mlp_regression(output_dim=2, layer_dims=[100, 100]):
+def make_mlp_regression(data_info, output_dim=2, layer_dims=[100, 100]):
   return make_mlp(layer_dims, output_dim)
 
 
-def make_mlp_regression_small():
+def make_mlp_regression_small(data_info):
   return make_mlp([50], 2)
 
 
 def make_mlp_classification(
-    num_classes, layer_dims=[256, 256]
+    data_info, num_classes, layer_dims=[256, 256]
 ):
   return make_mlp(layer_dims, num_classes)
 
   
-def get_model(model_name, *args, **kwargs):
+def get_model(model_name, data_info, **kwargs):
   _MODEL_FNS = {
     "lenet": make_lenet_fn,
     "resnet20": make_resnet20_fn,
@@ -221,6 +227,6 @@ def get_model(model_name, *args, **kwargs):
     "mlp_regression_small": make_mlp_regression_small,
     "mlp_classification": make_mlp_classification
   }
-  net_fn = _MODEL_FNS[model_name](*args, **kwargs)
+  net_fn = _MODEL_FNS[model_name](data_info, **kwargs)
   net = hk.transform_with_state(net_fn)
   return net.apply, net.init

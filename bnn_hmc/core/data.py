@@ -199,7 +199,7 @@ def load_uci_regression_dataset(
   y_test = normalize_with_stats(y_test, y_mean, y_std)
 
   data_info = {
-    "y_scale": y_std
+    "y_scale": float(y_std)
   }
   
   return (x_train, y_train), (x_test, y_test), data_info

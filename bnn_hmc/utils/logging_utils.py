@@ -74,6 +74,6 @@ def make_logging_dict(train_stats, test_stats, ensemble_stats):
   logging_dict = {}
   for prefix, stat_dict in zip(["train/", "test/", "test/ens_"],
                                [train_stats, test_stats, ensemble_stats]):
-    for stat_name, stat_val in stat_dict:
+    for stat_name, stat_val in stat_dict.items():
       logging_dict[prefix+stat_name] = stat_val
   return logging_dict

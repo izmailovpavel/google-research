@@ -81,7 +81,7 @@ def train_model():
   train_set, test_set, task, data_info = data.make_ds_pmap_fullbatch(
     args.dataset_name, dtype)
 
-  net_apply, net_init = models.get_model(args.model_name, **model_kwargs)
+  net_apply, net_init = models.get_model(args.model_name, data_info)
   
   checkpoint_dict, status = checkpoint_utils.initialize(
       dirname, args.init_checkpoint)
@@ -186,11 +186,11 @@ def train_model():
     if ((not in_burnin) and accepted) or args.no_mh:
       ensemble_predictions = ensemble_upd_fn(
         ensemble_predictions, num_ensembled, test_predictions)
-      ens_stats = train_utils.evaluate_metrics(
+      ensemble_stats = train_utils.evaluate_metrics(
         ensemble_predictions, test_set[1], metrics_fns)
       num_ensembled += 1
     else:
-      ens_stats = {}
+      ensemble_stats = {}
 
     # Logging
     other_logs = {
@@ -206,18 +206,18 @@ def train_model():
       "debug/in_burnin": float(in_burnin)
     }
     logging_dict = logging_utils.make_logging_dict(
-      train_stats, test_stats, ensemble_stats,)
+      train_stats, test_stats, ensemble_stats)
     logging_dict.update(other_logs)
 
-    for stat_name, stat_val in logging_dict:
+    for stat_name, stat_val in logging_dict.items():
       tf.summary.scalar(stat_name, stat_val, step=iteration)
     tabulate_dict = OrderedDict()
     tabulate_dict["i"] = iteration
     tabulate_dict["t"] = iteration_time
     tabulate_dict["accept_p"] = accept_prob
     tabulate_dict["accepted"] = accepted
-    for key in tabulate_metrics:
-      tabulate_dict[key] = logging_dict[key]
+    for metric_name in tabulate_metrics:
+      tabulate_dict[metric_name] = logging_dict[metric_name]
 
     table = logging_utils.make_table(
       tabulate_dict, iteration - start_iteration, args.tabulate_freq)
