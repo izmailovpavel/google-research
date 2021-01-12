@@ -310,7 +310,7 @@ def make_sgd_train_epoch(
     loss_avg = jnp.mean(losses)
     return params, net_state, opt_state, loss_avg, new_key
   
-  return sgd_train_epoch, _make_eval_fn(likelihood_prior_and_acc_fn)
+  return sgd_train_epoch
 
 
 def make_get_predictions(activation_fn, num_batches=1, is_training=False):

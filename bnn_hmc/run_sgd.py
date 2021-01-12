@@ -17,10 +17,12 @@
 
 import os
 from jax import numpy as jnp
+import numpy as onp
 import jax
 import tensorflow.compat.v2 as tf
 import argparse
 import time
+from collections import OrderedDict
 
 from bnn_hmc.core import data
 from bnn_hmc.core import losses
@@ -59,15 +61,16 @@ def train_model():
   cmd_args_utils.save_cmd(dirname, tf_writer)
 
   dtype = jnp.float64 if args.use_float64 else jnp.float32
-  train_set, test_set, task, model_kwargs = data.make_ds_pmap_fullbatch(
+  train_set, test_set, task, data_info = data.make_ds_pmap_fullbatch(
     args.dataset_name, dtype)
   
-  net_apply, net_init = models.get_model(args.model_name, **model_kwargs)
+  net_apply, net_init = models.get_model(args.model_name, data_info)
 
-  likelihood_factory, predict_fn, _, metrics_fns, tabulate_metrics = (
-      train_utils.get_task_specific_fns(task))
+  (likelihood_factory, predict_fn, ensemble_upd_fn, metrics_fns,
+   tabulate_metrics) = train_utils.get_task_specific_fns(task, data_info)
   log_likelihood_fn = likelihood_factory(args.temperature)
-  log_prior_fn, _ = losses.make_gaussian_log_prior(args.weight_decay, 1.)
+  log_prior_fn, log_prior_diff_fn = losses.make_gaussian_log_prior(
+    args.weight_decay, args.temperature)
 
   num_data = jnp.size(train_set[1])
   num_batches = num_data // args.batch_size
@@ -99,7 +102,7 @@ def train_model():
     elif status == checkpoint_utils.InitStatus.LOADED_PREEMPTED:
       print("Continuing the run from the last saved checkpoint")
 
-  sgd_train_epoch, evaluate = train_utils.make_sgd_train_epoch(
+  sgd_train_epoch = train_utils.make_sgd_train_epoch(
     net_apply, log_likelihood_fn, log_prior_fn, optimizer, num_batches)
   
   for iteration in range(start_iteration, args.num_epochs):
@@ -116,30 +119,47 @@ def train_model():
           iteration, params, net_state, opt_state, key)
       checkpoint_utils.save_checkpoint(checkpoint_path, checkpoint_dict)
 
+    # Evaluation
     train_stats = {"log_prob": logprob_avg}
     test_stats = {}
 
     if (iteration % args.eval_freq == 0) or (iteration == args.num_epochs - 1):
-      test_predictions = onp.asarray(predict_fn(
-          net_apply, params, net_state, test_set, 1, False))
-      train_predictions = onp.asarray(predict_fn(
-        net_apply, params, net_state, train_set, 1, False))
-      test_labels, train_labels = test_set[1], train_set[1]
+      test_predictions = onp.asarray(
+        predict_fn(net_apply, params, net_state, test_set))
+      train_predictions = onp.asarray(
+        predict_fn(net_apply, params, net_state, train_set))
+      test_stats = train_utils.evaluate_metrics(
+        test_predictions, test_set[1], metrics_fns)
+      train_stats = train_utils.evaluate_metrics(
+        train_predictions, train_set[1], metrics_fns)
+      train_stats["prior"] = log_prior_fn(params)
 
+    # Logging
+    other_logs = {
+      "telemetry/iteration": iteration,
+      "telemetry/iteration_time": iteration_time,
+      "hypers/step_size": lr_schedule(opt_state[-1].count),
+      "hypers/weight_decay": args.weight_decay,
+      "hypers/temperature": args.temperature,
+    }
+    logging_dict = logging_utils.make_logging_dict(
+      train_stats, test_stats, {})
+    logging_dict.update(other_logs)
 
-      test_stats = evaluate(params, net_state, test_set)
-      train_stats.update(evaluate(params, net_state, train_set))
+    for stat_name, stat_val in logging_dict.items():
+      tf.summary.scalar(stat_name, stat_val, step=iteration)
+    tabulate_dict = OrderedDict()
+    tabulate_dict["i"] = iteration
+    tabulate_dict["t"] = iteration_time
+    tabulate_dict["lr"] = lr_schedule(opt_state[-1].count)
+    for metric_name in tabulate_metrics:
+      if metric_name in logging_dict:
+        tabulate_dict[metric_name] = logging_dict[metric_name]
+      else:
+        tabulate_dict[metric_name] = None
 
-    tabulate_dict = logging_utils.make_common_logs(
-      tf_writer, iteration, iteration_time, train_stats, test_stats)
-    tabulate_dict["step_size"] = lr_schedule(opt_state[-1].count)
-
-    with tf_writer.as_default():
-      tf.summary.scalar("hypers/step_size", lr_schedule(opt_state[-1].count),
-                        step=iteration)
-    
     table = logging_utils.make_table(
-        tabulate_dict, iteration - start_iteration, args.tabulate_freq)
+      tabulate_dict, iteration - start_iteration, args.tabulate_freq)
     print(table)
 
 
