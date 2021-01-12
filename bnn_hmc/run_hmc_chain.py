@@ -22,6 +22,7 @@ import jax
 import tensorflow.compat.v2 as tf
 import argparse
 import time
+from collections import OrderedDict
 
 from bnn_hmc.core import data
 from bnn_hmc.core import losses
@@ -77,7 +78,7 @@ def train_model():
   num_devices = len(jax.devices())
 
   dtype = jnp.float64 if args.use_float64 else jnp.float32
-  train_set, test_set, task, model_kwargs = data.make_ds_pmap_fullbatch(
+  train_set, test_set, task, data_info = data.make_ds_pmap_fullbatch(
     args.dataset_name, dtype)
 
   net_apply, net_init = models.get_model(args.model_name, **model_kwargs)
@@ -121,19 +122,19 @@ def train_model():
     
   trajectory_len = args.trajectory_len
 
-  likelihood_factory, ensemble_upd_fn = (
-      train_utils.get_task_specific_fns(task))
+  (likelihood_factory, predict_fn, ensemble_upd_fn, metrics_fns,
+   tabulate_metrics) = train_utils.get_task_specific_fns(task, data_info)
   log_likelihood_fn = likelihood_factory(args.temperature)
   log_prior_fn, log_prior_diff_fn = losses.make_gaussian_log_prior(
     args.weight_decay, args.temperature)
 
-  update, get_log_prob_and_grad, evaluate = train_utils.make_hmc_update(
+  update, get_log_prob_and_grad = train_utils.make_hmc_update(
     net_apply, log_likelihood_fn, log_prior_fn, log_prior_diff_fn,
     args.max_num_leapfrog_steps, args.target_accept_rate,
     args.step_size_adaptation_speed)
 
   log_prob, state_grad, log_likelihood, net_state = (
-      get_log_prob_and_grad(train_set, params, net_state))
+    get_log_prob_and_grad(train_set, params, net_state))
 
   assert log_prob.dtype == dtype, (
     "log_prob data type {} does not match specified data type {}".format(
@@ -143,8 +144,6 @@ def train_model():
   assert all([g_type == dtype for g_type in grad_types]), (
     "Gradient data types {} do not match specified data type {}".format(
       grad_types, dtype))
-
-  tabulate_full_header_printed = False
   
   for iteration in range(start_iteration, args.num_iterations):
     
@@ -164,6 +163,7 @@ def train_model():
                key, step_size, trajectory_len, do_mh_correction))
     iteration_time = time.time() - start_time
 
+    # Save the checkpoint
     checkpoint_name = checkpoint_utils.make_checkpoint_name(iteration)
     checkpoint_path = os.path.join(dirname, checkpoint_name)
     checkpoint_dict = checkpoint_utils.make_hmc_checkpoint_dict(
@@ -171,41 +171,53 @@ def train_model():
         ensemble_predictions)
     checkpoint_utils.save_checkpoint(checkpoint_path, checkpoint_dict)
 
-    test_stats = evaluate(params, net_state, test_set)
-    train_stats = evaluate(params, net_state, train_set)
-    del test_stats["prior"]
-    tabulate_dict = logging_utils.make_common_logs(
-        tf_writer, iteration, iteration_time, train_stats, test_stats)
+    # Evaluation
+    test_predictions = onp.asarray(
+      predict_fn(net_apply, params, net_state, test_set))
+    train_predictions = onp.asarray(
+      predict_fn(net_apply, params, net_state, train_set))
+    test_stats = train_utils.evaluate_metrics(
+      test_predictions, test_set[1], metrics_fns)
+    train_stats = train_utils.evaluate_metrics(
+      train_predictions, train_set[1], metrics_fns)
+    train_stats["prior"] = log_prior_fn(params)
 
-    tabulate_dict["accept_prob"] = accept_prob
-    tabulate_dict["accepted"] = accepted
 
     if ((not in_burnin) and accepted) or args.no_mh:
-      ensemble_predictions, num_ensembled, ensemble_stats = (ensemble_upd_fn(
-          net_apply, params, net_state, test_set, num_ensembled,
-          ensemble_predictions))
-      tabulate_dict = logging_utils.add_ensemle_logs(
-          tf_writer, tabulate_dict, ensemble_stats, iteration)
-      if iteration > start_iteration and not tabulate_full_header_printed:
-        print(logging_utils.make_header(tabulate_dict))
-      tabulate_full_header_printed = True
+      ensemble_predictions = ensemble_upd_fn(
+        ensemble_predictions, num_ensembled, test_predictions)
+      ens_stats = train_utils.evaluate_metrics(
+        ensemble_predictions, test_set[1], metrics_fns)
+      num_ensembled += 1
+    else:
+      ens_stats = {}
 
-    with tf_writer.as_default():
-      tf.summary.scalar("telemetry/accept_prob", accept_prob, step=iteration)
-      tf.summary.scalar("telemetry/accepted", accepted, step=iteration)
-      
-      tf.summary.scalar("hypers/step_size", step_size, step=iteration)
-      tf.summary.scalar("hypers/trajectory_len", trajectory_len,
-                        step=iteration)
-      tf.summary.scalar("hypers/weight_decay", args.weight_decay,
-                        step=iteration)
-      tf.summary.scalar("hypers/temperature", args.temperature,
-                        step=iteration)
+    # Logging
+    other_logs = {
+      "telemetry/iteration": iteration,
+      "telemetry/iteration_time": iteration_time,
+      "telemetry/accept_prob": accept_prob,
+      "telemetry/accepted": accepted,
+      "hypers/step_size": step_size,
+      "hypers/trajectory_len": trajectory_len,
+      "hypers/weight_decay": args.weight_decay,
+      "hypers/temperature": args.temperature,
+      "debug/do_mh_correction": float(do_mh_correction),
+      "debug/in_burnin": float(in_burnin)
+    }
+    logging_dict = logging_utils.make_logging_dict(
+      train_stats, test_stats, ensemble_stats,)
+    logging_dict.update(other_logs)
 
-      tf.summary.scalar("debug/do_mh_correction", float(do_mh_correction),
-                        step=iteration)
-      tf.summary.scalar("debug/in_burnin", float(in_burnin),
-                        step=iteration)
+    for stat_name, stat_val in logging_dict:
+      tf.summary.scalar(stat_name, stat_val, step=iteration)
+    tabulate_dict = OrderedDict()
+    tabulate_dict["i"] = iteration
+    tabulate_dict["t"] = iteration_time
+    tabulate_dict["accept_p"] = accept_prob
+    tabulate_dict["accepted"] = accepted
+    for key in tabulate_metrics:
+      tabulate_dict[key] = logging_dict[key]
 
     table = logging_utils.make_table(
       tabulate_dict, iteration - start_iteration, args.tabulate_freq)

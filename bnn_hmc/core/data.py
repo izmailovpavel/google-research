@@ -109,7 +109,10 @@ def load_imdb_dataset():
   x_train, y_train = preprocess(x_train, y_train, max_length=max_length)
   x_val, y_val = preprocess(x_val, y_val, max_length=max_length)
   x_test, y_test = preprocess(x_test, y_test, max_length=max_length)
-  return (x_train, y_train), (x_test, y_test), (x_val, y_val), 2
+  data_info = {
+    "num_classes": 2
+  }
+  return (x_train, y_train), (x_test, y_test), (x_val, y_val), data_info
 
 
 def load_image_dataset(
@@ -153,7 +156,12 @@ def get_image_dataset(name):
   
   test_set, _, _ = load_image_dataset("test", -1, name)
   test_set = next(iter(test_set))
-  return train_set, test_set, None, n_classes
+
+  data_info = {
+    "num_classes": n_classes
+  }
+
+  return train_set, test_set, data_info
 
 
 def load_uci_regression_dataset(
@@ -168,15 +176,6 @@ def load_uci_regression_dataset(
   data_arr = onp.load(path)
   x, y = data_arr["x"], data_arr["y"]
   
-  def normalize_with_stats(arr, arr_mean=None, arr_std=None):
-    return (arr - arr_mean) / arr_std
-  
-  def normalize(arr):
-    eps = 1e-6
-    arr_mean = arr.mean(axis=0, keepdims=True)
-    arr_std = arr.std(axis=0, keepdims=True) + eps
-    return normalize_with_stats(arr, arr_mean, arr_std), arr_mean, arr_std
-  
   indices = jax.random.permutation(jax.random.PRNGKey(split_seed), len(x))
   indices = onp.asarray(indices)
   x, y = x[indices], y[indices]
@@ -184,13 +183,26 @@ def load_uci_regression_dataset(
   n_train = int(train_fraction * len(x))
   x_train, y_train = x[:n_train], y[:n_train]
   x_test, y_test = x[n_train:], y[n_train:]
+
+  def normalize_with_stats(arr, arr_mean=None, arr_std=None):
+    return (arr - arr_mean) / arr_std
+
+  def normalize(arr):
+    eps = 1e-6
+    arr_mean = arr.mean(axis=0, keepdims=True)
+    arr_std = arr.std(axis=0, keepdims=True) + eps
+    return normalize_with_stats(arr, arr_mean, arr_std), arr_mean, arr_std
   
   x_train, x_mean, x_std = normalize(x_train)
   y_train, y_mean, y_std = normalize(y_train)
   x_test = normalize_with_stats(x_test, x_mean, x_std)
   y_test = normalize_with_stats(y_test, y_mean, y_std)
+
+  data_info = {
+    "y_scale": y_std
+  }
   
-  return (x_train, y_train), (x_test, y_test)
+  return (x_train, y_train), (x_test, y_test), data_info
 
 
 def _parse_uci_regression_dataset(name_str):
@@ -238,11 +250,11 @@ def make_ds_pmap_fullbatch(name, dtype, n_devices=None):
   """Make train and test sets sharded over batch dim."""
   name = name.lower()
   if name in ImgDatasets._value2member_map_:
-    train_set, test_set, _, num_classes = get_image_dataset(name)
+    train_set, test_set, data_info = get_image_dataset(name)
     loaded = True
     task = Task.CLASSIFICATION
   elif name == "imdb":
-    train_set, test_set, _, num_classes = load_imdb_dataset()
+    train_set, test_set, _, data_info = load_imdb_dataset()
     dtype = jnp.int32
     loaded = True
     task = Task.CLASSIFICATION
@@ -250,17 +262,13 @@ def make_ds_pmap_fullbatch(name, dtype, n_devices=None):
     name, seed = _parse_uci_regression_dataset(name)
     loaded = name is not None
     if name is not None:
-      train_set, test_set = load_uci_regression_dataset(name, int(seed))
+      train_set, test_set, data_info = load_uci_regression_dataset(
+          name, int(seed))
       loaded = True
       task = Task.REGRESSION
     
   if not loaded:
     raise ValueError("Unknown dataset name: {}".format(name))
-
-  if task == Task.CLASSIFICATION:
-    kwargs = {"num_classes": num_classes}
-  else:
-    kwargs = {}
 
   train_set, test_set = tuple(pmap_dataset(ds, n_devices)
                               for ds in (train_set, test_set))
@@ -268,4 +276,4 @@ def make_ds_pmap_fullbatch(name, dtype, n_devices=None):
   train_set, test_set = map(
       lambda ds: (ds[0].astype(dtype), ds[1]), (train_set, test_set))
   
-  return train_set, test_set, task, kwargs
+  return train_set, test_set, task, data_info

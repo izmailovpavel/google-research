@@ -17,7 +17,6 @@
 
 import tabulate
 import tensorflow.compat.v2 as tf
-from collections import OrderedDict
 
 
 def make_table(tabulate_dict, iteration, header_freq):
@@ -41,31 +40,40 @@ def make_header(tabulate_dict):
   return table
 
 
-def make_common_logs(
-    tf_writer, iteration, iteration_time, train_stats, test_stats
-):
-  """Create tabulate dict and push statistics to tensorboard."""
-  tabulate_dict = OrderedDict()
-  tabulate_dict["iteration"] = iteration
-  tabulate_dict["time"] = iteration_time
-  
-  with tf_writer.as_default():
-    for prefix, stats in zip(["train", "test"], [train_stats, test_stats]):
-      for key, val in stats.items():
-        if ((key not in ["likelihood", "prior"]) and
-            not (prefix == "test" and key == "log_prob")):
-          tabulate_dict["{}_{}".format(prefix, key)] = val
-        tf.summary.scalar("{}/{}".format(prefix, key), val, step=iteration)
+# def make_common_logs(
+#     tf_writer, iteration, iteration_time, train_stats, test_stats
+# ):
+#   """Create tabulate dict and push statistics to tensorboard."""
+#   tabulate_dict = OrderedDict()
+#   tabulate_dict["iteration"] = iteration
+#   tabulate_dict["time"] = iteration_time
+#
+#   with tf_writer.as_default():
+#     for prefix, stats in zip(["train", "test"], [train_stats, test_stats]):
+#       for key, val in stats.items():
+#         if ((key not in ["likelihood", "prior"]) and
+#             not (prefix == "test" and key == "log_prob")):
+#           tabulate_dict["{}_{}".format(prefix, key)] = val
+#         tf.summary.scalar("{}/{}".format(prefix, key), val, step=iteration)
+#
+#     tf.summary.scalar("telemetry/iteration_time", iteration_time,
+#                       step=iteration)
+#
+#   return tabulate_dict
+#
+#
+# def add_ensemle_logs(tf_writer, tabulate_dict, ensemble_stats, iteration):
+#   with tf_writer.as_default():
+#     for key, val in ensemble_stats.items():
+#       tabulate_dict["ens_{}".format(key)] = val
+#       tf.summary.scalar("ensemble/{}".format(key), val, step=iteration)
+#   return tabulate_dict
 
-    tf.summary.scalar("telemetry/iteration_time", iteration_time,
-                      step=iteration)
-  
-  return tabulate_dict
 
-
-def add_ensemle_logs(tf_writer, tabulate_dict, ensemble_stats, iteration):
-  with tf_writer.as_default():
-    for key, val in ensemble_stats.items():
-      tabulate_dict["ens_{}".format(key)] = val
-      tf.summary.scalar("ensemble/{}".format(key), val, step=iteration)
-  return tabulate_dict
+def make_logging_dict(train_stats, test_stats, ensemble_stats):
+  logging_dict = {}
+  for prefix, stat_dict in zip(["train/", "test/", "test/ens_"],
+                               [train_stats, test_stats, ensemble_stats]):
+    for stat_name, stat_val in stat_dict:
+      logging_dict[prefix+stat_name] = stat_val
+  return logging_dict

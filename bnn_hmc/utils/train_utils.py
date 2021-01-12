@@ -68,10 +68,11 @@ def make_optimizer(lr_schedule, momentum_decay):
                      optix.scale_by_schedule(lr_schedule))
 
 
-def get_task_specific_fns(task, task_kwargs):
+def get_task_specific_fns(task, data_info):
   if task == data.Task.CLASSIFICATION:
     likelihood_fn = losses.make_xent_log_likelihood
-    ensemble_fn = ensemble_utils.update_ensemble_classification
+    ensemble_fn = (
+      ensemble_utils.compute_updated_ensemble_predictions_classification)
     predict_fn = get_softmax_predictions
     metrics_fns = {
       "accuracy": metrics.accuracy,
@@ -79,15 +80,15 @@ def get_task_specific_fns(task, task_kwargs):
       "ece": lambda preds, y: metrics.calibration_curve(preds, y)["ece"]
     }
     tabulate_metrics = [
-      "train_accuracy", "test_accuracy", "test_nll",
-      "ensemble_accuracy", "ensemble_nll", "ensemble_ece"
+      "train/accuracy", "test/accuracy", "test/nll",
+      "ensemble/accuracy", "ensemble/nll", "ensemble/ece"
     ]
   elif task == data.Task.REGRESSION:
     likelihood_fn = losses.make_gaussian_likelihood
-    ensemble_fn = ensemble_utils.update_ensemble_regression
+    ensemble_fn = ensemble_utils.compute_updated_ensemble_predictions_regression
     predict_fn = get_regression_gaussian_predictions
 
-    data_scale = task_kwargs["y_scale"]
+    data_scale = data_info["y_scale"]
     metrics_fns = {
       "nll": metrics.regression_nll,
       "scaled_mse": metrics.mse,
@@ -96,8 +97,8 @@ def get_task_specific_fns(task, task_kwargs):
       "rmse": lambda preds, y: metrics.rmse(preds, y, data_scale),
     }
     tabulate_metrics = [
-      "train_rmse", "train_nll", "test_rmse", "test_nll",
-      "ensemble_rmse", "ensemble_nll"
+      "train/rmse", "train/nll", "test/rmse", "test/nll",
+      "test/ens_rmse", "test/ens_nll"
     ]
   return likelihood_fn, predict_fn, ensemble_fn, metrics_fns, tabulate_metrics
 
@@ -144,28 +145,41 @@ def _make_perdevice_minibatch_log_prob_and_grad(
   return perdevice_log_prob_and_grad
 
 
-def _make_eval_fn(likelihood_prior_and_acc_fn):
-  """Define evaluation function."""
-  @functools.partial(
-    jax.pmap, axis_name='i', in_axes=(None, 0, 0)
-  )
-  def pmap_eval(params, net_state, dataset):
-    likelihood, prior, stats, _ = likelihood_prior_and_acc_fn(
-      params, net_state, dataset, is_training=False)
-    likelihood = jax.lax.psum(likelihood, axis_name='i')
-    log_prob = likelihood + prior
-    stats = {
-      key: jax.lax.pmean(val, axis_name='i') for key, val in stats.items()}
-    stats["likelihood"] = likelihood
-    stats["prior"] = prior
-    stats["log_prob"] = log_prob
-    return stats
-  
-  def evaluate(params, net_state, dataset):
-    stats = pmap_eval(params, net_state, dataset)
-    return {key: val[0] for key, val in stats.items()}
-  
-  return evaluate
+def evaluate_metrics(preds, targets, metrics_fns):
+  """Evaluate performance metrics on predictions.
+  """
+  stats = {}
+  for metric_name, metric_fn in metrics_fns.items():
+    stats[metric_name] = metric_fn(preds, targets)
+  return stats
+
+
+# def _make_eval_fn(likelihood_prior_and_acc_fn):
+#   """Define evaluation function.
+#
+#   Returns a dictionary containing the likelihood, prior and log-posterior
+#   density value.
+#   """
+#   @functools.partial(
+#     jax.pmap, axis_name='i', in_axes=(None, 0, 0)
+#   )
+#   def pmap_eval(params, net_state, dataset):
+#     likelihood, prior, stats, _ = likelihood_prior_and_acc_fn(
+#       params, net_state, dataset, is_training=False)
+#     likelihood = jax.lax.psum(likelihood, axis_name='i')
+#     log_prob = likelihood + prior
+#     stats = {
+#       key: jax.lax.pmean(val, axis_name='i') for key, val in stats.items()}
+#     stats["likelihood"] = likelihood
+#     stats["prior"] = prior
+#     stats["log_prob"] = log_prob
+#     return stats
+#
+#   def evaluate(params, net_state, dataset):
+#     stats = pmap_eval(params, net_state, dataset)
+#     return {key: val[0] for key, val in stats.items()}
+#
+#   return evaluate
 
 
 def make_hmc_update(
@@ -240,8 +254,9 @@ def make_hmc_update(
     return (*map(tree_utils.get_first_elem_in_sharded_tree, (log_prob, grad)),
             likelihood[0], net_state)
 
-  return (update, get_log_prob_and_grad,
-          _make_eval_fn(likelihood_prior_and_acc_fn))
+  return update, get_log_prob_and_grad
+  # return (update, get_log_prob_and_grad,
+  #         _make_eval_fn(likelihood_prior_and_acc_fn))
 
 
 def make_sgd_train_epoch(

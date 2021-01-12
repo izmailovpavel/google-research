@@ -8,7 +8,7 @@ def running_average(old_avg_val, new_val, n_avg):
   return new_avg_val
 
 
-def _compute_updated_ensemble_predictions_classification(
+def compute_updated_ensemble_predictions_classification(
     ensemble_predicted_probs, num_ensembled, new_predicted_probs
 ):
   """Update ensemble predictive categorical distribution."""
@@ -21,22 +21,22 @@ def _compute_updated_ensemble_predictions_classification(
   return new_ensemble_predicted_probs
 
 
-def update_ensemble_classification(
-    net_apply, params, net_state, test_set, num_ensembled,
-    ensemble_predicted_probs
-):
-  """Update ensemble predicted probabilities for classification."""
-  predicted_probs = onp.asarray(train_utils.get_softmax_predictions(
-      net_apply, params, net_state, test_set, 1, False))
+# def update_ensemble_classification(
+#     net_apply, params, net_state, test_set, num_ensembled,
+#     ensemble_predicted_probs
+# ):
+#   """Update ensemble predicted probabilities for classification."""
+#   predicted_probs = onp.asarray(train_utils.get_softmax_predictions(
+#       net_apply, params, net_state, test_set, 1, False))
+#
+#   new_ensemble_predicted_probs = (
+#       _compute_updated_ensemble_predictions_classification(
+#         ensemble_predicted_probs, num_ensembled, predicted_probs))
+#
+#   return new_ensemble_predicted_probs, num_ensembled + 1
 
-  new_ensemble_predicted_probs = (
-      _compute_updated_ensemble_predictions_classification(
-        ensemble_predicted_probs, num_ensembled, predicted_probs))
 
-  return new_ensemble_predicted_probs, num_ensembled + 1
-
-
-def _compute_updated_ensemble_predictions_regression(
+def compute_updated_ensemble_predictions_regression(
     ensemble_predictions, num_ensembled, new_predictions
 ):
   """Update ensemble predictive distribution assuming Gaussian likelihood."""
@@ -54,17 +54,17 @@ def _compute_updated_ensemble_predictions_regression(
   return new_ensemble_predictions
 
 
-def update_ensemble_regression(
-    net_apply, params, net_state, test_set, num_ensembled,
-    ensemble_predictions
-):
-  """Update ensemble predicted probabilities for regression."""
-  # ToDo: Test!
-  new_predictions = onp.asarray(train_utils.get_regression_gaussian_predictions(
-      net_apply, params, net_state, test_set, 1, False))
-
-  new_ensemble_predictions = (
-      _compute_updated_ensemble_predictions_regression(
-        ensemble_predictions, num_ensembled, new_predictions))
-
-  return new_ensemble_predictions, num_ensembled + 1
+# def update_ensemble_regression(
+#     net_apply, params, net_state, test_set, num_ensembled,
+#     ensemble_predictions
+# ):
+#   """Update ensemble predicted probabilities for regression."""
+#   # ToDo: Test!
+#   new_predictions = onp.asarray(train_utils.get_regression_gaussian_predictions(
+#       net_apply, params, net_state, test_set, 1, False))
+#
+#   new_ensemble_predictions = (
+#       _compute_updated_ensemble_predictions_regression(
+#         ensemble_predictions, num_ensembled, new_predictions))
+#
+#   return new_ensemble_predictions, num_ensembled + 1
