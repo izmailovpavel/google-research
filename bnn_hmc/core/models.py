@@ -197,6 +197,7 @@ def make_mlp(layer_dims, output_dim):
     for layer_dim in layer_dims:
       x = hk.Linear(layer_dim)(x)
       x = jax.nn.relu(x)
+      # x = jax.nn.swish(x)
     x = hk.Linear(output_dim)(x)
     return x
   return forward

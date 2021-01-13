@@ -146,8 +146,9 @@ def train_model():
       train_stats, test_stats, {})
     logging_dict.update(other_logs)
 
-    for stat_name, stat_val in logging_dict.items():
-      tf.summary.scalar(stat_name, stat_val, step=iteration)
+    with tf_writer.as_default():
+      for stat_name, stat_val in logging_dict.items():
+        tf.summary.scalar(stat_name, stat_val, step=iteration)
     tabulate_dict = OrderedDict()
     tabulate_dict["i"] = iteration
     tabulate_dict["t"] = iteration_time
