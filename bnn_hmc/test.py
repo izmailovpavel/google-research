@@ -5,10 +5,9 @@ import jax
 import jax.numpy as jnp
 import numpy as onp
 import argparse
-from jax.experimental.callback import rewrite
 
-from core import data, losses, hmc, models
-from utils import precision_utils, train_utils
+from core import hmc
+from utils import precision_utils, train_utils, data_utils, models, losses
 
 parser = argparse.ArgumentParser("Unit tests for BNN HMC code.")
 parser.add_argument("--tpu_ip", type=str, default="10.0.0.2",
@@ -27,7 +26,7 @@ class TestHMC(unittest.TestCase):
   def _prepare():
     net_fn = models.lenet_fn
     net = hk.transform(net_fn)
-    train_set, test_set, _ = data.make_ds_pmap_fullbatch(name="cifar10")
+    train_set, test_set, _ = data_utils.make_ds_pmap_fullbatch(name="cifar10")
     init_key = jax.random.PRNGKey(0)
     init_data = jax.tree_map(lambda elem: elem[0], train_set)
     params = net.init(init_key, init_data)

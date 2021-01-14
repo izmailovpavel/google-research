@@ -15,8 +15,6 @@
 
 """Utility functions for DNN training."""
 
-from typing import Callable
-
 import jax
 import optax
 import jax.numpy as jnp
@@ -26,8 +24,8 @@ import functools
 from jax.config import config
 
 from bnn_hmc.core import hmc
-from bnn_hmc.core import data
-from bnn_hmc.core import losses
+from bnn_hmc.utils import data_utils
+from bnn_hmc.utils import losses
 from bnn_hmc.utils import tree_utils
 from bnn_hmc.utils import ensemble_utils
 from bnn_hmc.utils import metrics
@@ -69,7 +67,7 @@ def make_optimizer(lr_schedule, momentum_decay):
 
 
 def get_task_specific_fns(task, data_info):
-  if task == data.Task.CLASSIFICATION:
+  if task == data_utils.Task.CLASSIFICATION:
     likelihood_fn = losses.make_xent_log_likelihood
     ensemble_fn = (
       ensemble_utils.compute_updated_ensemble_predictions_classification)
@@ -81,18 +79,19 @@ def get_task_specific_fns(task, data_info):
     }
     tabulate_metrics = [
       "train/accuracy", "test/accuracy", "test/nll",
-      "ensemble/accuracy", "ensemble/nll", "ensemble/ece"
+      "test/ens_accuracy", "test/ens_nll", "test/ens_ece"
     ]
-  elif task == data.Task.REGRESSION:
+  elif task == data_utils.Task.REGRESSION:
     likelihood_fn = losses.make_gaussian_likelihood
     ensemble_fn = ensemble_utils.compute_updated_ensemble_predictions_regression
     predict_fn = get_regression_gaussian_predictions
 
     data_scale = data_info["y_scale"]
     metrics_fns = {
-      "nll": metrics.regression_nll,
+      "scaled_nll": metrics.regression_nll,
       "scaled_mse": metrics.mse,
       "scaled_rmse": metrics.rmse,
+      "nll": lambda preds, y: metrics.regression_nll(preds, y, data_scale),
       "mse": lambda preds, y: metrics.mse(preds, y, data_scale),
       "rmse": lambda preds, y: metrics.rmse(preds, y, data_scale),
     }
@@ -152,34 +151,6 @@ def evaluate_metrics(preds, targets, metrics_fns):
   for metric_name, metric_fn in metrics_fns.items():
     stats[metric_name] = metric_fn(preds, targets)
   return stats
-
-
-# def _make_eval_fn(likelihood_prior_and_acc_fn):
-#   """Define evaluation function.
-#
-#   Returns a dictionary containing the likelihood, prior and log-posterior
-#   density value.
-#   """
-#   @functools.partial(
-#     jax.pmap, axis_name='i', in_axes=(None, 0, 0)
-#   )
-#   def pmap_eval(params, net_state, dataset):
-#     likelihood, prior, stats, _ = likelihood_prior_and_acc_fn(
-#       params, net_state, dataset, is_training=False)
-#     likelihood = jax.lax.psum(likelihood, axis_name='i')
-#     log_prob = likelihood + prior
-#     stats = {
-#       key: jax.lax.pmean(val, axis_name='i') for key, val in stats.items()}
-#     stats["likelihood"] = likelihood
-#     stats["prior"] = prior
-#     stats["log_prob"] = log_prob
-#     return stats
-#
-#   def evaluate(params, net_state, dataset):
-#     stats = pmap_eval(params, net_state, dataset)
-#     return {key: val[0] for key, val in stats.items()}
-#
-#   return evaluate
 
 
 def make_hmc_update(

@@ -23,8 +23,9 @@ import argparse
 import time
 import numpy as onp
 
-from core import data, losses, sgmcmc, models
-from utils import checkpoint_utils, cmd_args_utils, logging_utils, precision_utils, train_utils, tree_utils, metrics
+from core import sgmcmc
+from utils import checkpoint_utils, cmd_args_utils, logging_utils, \
+  precision_utils, train_utils, tree_utils, metrics, data_utils, models, losses
 
 parser = argparse.ArgumentParser(description="Run SGD on a cloud TPU")
 cmd_args_utils.add_common_flags(parser)
@@ -61,7 +62,7 @@ def train_model():
   cmd_args_utils.save_cmd(dirname, tf_writer)
   
   dtype = jnp.float64 if args.use_float64 else jnp.float32
-  train_set, test_set, num_classes = data.make_ds_pmap_fullbatch(
+  train_set, test_set, num_classes = data_utils.make_ds_pmap_fullbatch(
     args.dataset_name, dtype)
   
   net_apply, net_init = models.get_model(args.model_name, num_classes)

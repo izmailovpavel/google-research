@@ -211,10 +211,14 @@ def make_mlp_regression_small(data_info):
   return make_mlp([50], 2)
 
 
-def make_mlp_classification(
-    data_info, num_classes, layer_dims=[256, 256]
-):
+def make_mlp_classification(data_info, layer_dims=[256, 256]):
+  num_classes = data_info["num_classes"]
   return make_mlp(layer_dims, num_classes)
+
+
+def make_logistic_regression(data_info):
+  num_classes = data_info["num_classes"]
+  return make_mlp([], num_classes)
 
   
 def get_model(model_name, data_info, **kwargs):
@@ -226,7 +230,8 @@ def get_model(model_name, data_info, **kwargs):
     "smooth_cnn_lstm": make_smooth_cnn_lstm,
     "mlp_regression": make_mlp_regression,
     "mlp_regression_small": make_mlp_regression_small,
-    "mlp_classification": make_mlp_classification
+    "mlp_classification": make_mlp_classification,
+    "logistic_regression": make_logistic_regression,
   }
   net_fn = _MODEL_FNS[model_name](data_info, **kwargs)
   net = hk.transform_with_state(net_fn)

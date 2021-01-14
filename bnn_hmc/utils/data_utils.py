@@ -220,6 +220,13 @@ def _parse_uci_regression_dataset(name_str):
   return None, None
 
 
+def load_npz_array(filename):
+  arr = onp.load(filename, allow_pickle=True)
+  return ((arr["x_train"], arr["y_train"]),
+          (arr["x_test"], arr["y_test"]),
+          arr["data_info"].item())
+
+
 def batch_split_axis(batch, n_split):
   """Reshapes batch to have first axes size equal n_split."""
   x, y = batch
@@ -256,6 +263,10 @@ def make_ds_pmap_fullbatch(name, dtype, n_devices=None):
   elif name == "imdb":
     train_set, test_set, _, data_info = load_imdb_dataset()
     dtype = jnp.int32
+    loaded = True
+    task = Task.CLASSIFICATION
+  elif name[-4:] == ".npz":
+    train_set, test_set, data_info = load_npz_array(name)
     loaded = True
     task = Task.CLASSIFICATION
   else:

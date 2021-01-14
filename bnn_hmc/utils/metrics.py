@@ -90,9 +90,10 @@ def rmse(predictions, targets, y_scale=1.):
   return onp.sqrt(mse(predictions, targets, y_scale))
 
 
-def regression_nll(predictions, targets):
+def regression_nll(predictions, targets, y_scale=1.):
   #ToDo: check
   mus, sigmas = onp.split(predictions, [1], axis=-1)
   se = (mus - targets) ** 2
   nll = 0.5 * (se / sigmas**2 + onp.log(2 * onp.pi * sigmas**2)).mean()
+  nll += onp.log(y_scale)
   return nll

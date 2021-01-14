@@ -24,16 +24,14 @@ import argparse
 import time
 from collections import OrderedDict
 
-from bnn_hmc.core import data
-from bnn_hmc.core import losses
-from bnn_hmc.core import models
+from bnn_hmc.utils import data_utils
+from bnn_hmc.utils import models
+from bnn_hmc.utils import losses
 from bnn_hmc.utils import checkpoint_utils
 from bnn_hmc.utils import cmd_args_utils
 from bnn_hmc.utils import logging_utils
 from bnn_hmc.utils import train_utils
 from bnn_hmc.utils import tree_utils
-from bnn_hmc.utils import metrics
-from bnn_hmc.utils import ensemble_utils
 
 parser = argparse.ArgumentParser(description="Run an HMC chain on a cloud TPU")
 cmd_args_utils.add_common_flags(parser)
@@ -78,7 +76,7 @@ def train_model():
   num_devices = len(jax.devices())
 
   dtype = jnp.float64 if args.use_float64 else jnp.float32
-  train_set, test_set, task, data_info = data.make_ds_pmap_fullbatch(
+  train_set, test_set, task, data_info = data_utils.make_ds_pmap_fullbatch(
     args.dataset_name, dtype)
 
   net_apply, net_init = models.get_model(args.model_name, data_info)

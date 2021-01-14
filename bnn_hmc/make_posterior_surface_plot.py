@@ -24,8 +24,8 @@ from haiku._src.data_structures import FlatMapping
 import functools
 import tqdm
 
-from core import data, losses, models
-from utils import checkpoint_utils, cmd_args_utils, train_utils, tree_utils
+from utils import checkpoint_utils, cmd_args_utils, train_utils, tree_utils, \
+  data_utils, models, losses
 
 from matplotlib import pyplot as plt
 
@@ -83,7 +83,7 @@ def run_visualization():
   os.makedirs(dirname, exist_ok=True)
   cmd_args_utils.save_cmd(dirname, None)
   
-  train_set, test_set, num_classes = data.make_ds_pmap_fullbatch(
+  train_set, test_set, num_classes = data_utils.make_ds_pmap_fullbatch(
     name=args.dataset_name)
   
   net_apply, _ = models.get_model(args.model_name, num_classes)
