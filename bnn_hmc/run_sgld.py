@@ -166,7 +166,6 @@ def train_model():
       num_ensembled += 1
     else:
       ensemble_stats = {}
-      ensemble_predictions = None
       test_predictions = None
 
     # Checkpoint
