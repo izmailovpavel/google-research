@@ -133,7 +133,7 @@ def parse_sgd_checkpoint_dict(checkpoint_dict):
 
 def make_sgmcmc_checkpoint_dict(
     iteration, params, net_state, opt_state, key, num_ensembled,
-    ensemble_predictions
+    predictions, ensemble_predictions
 ):
   checkpoint_dict = {
     "iteration": iteration,
@@ -142,6 +142,7 @@ def make_sgmcmc_checkpoint_dict(
     "opt_state": opt_state,
     "key": key,
     "num_ensembled": num_ensembled,
+    "predictions": predictions,
     "ensemble_predictions": ensemble_predictions
   }
   return checkpoint_dict
@@ -149,5 +150,5 @@ def make_sgmcmc_checkpoint_dict(
 
 def parse_sgmcmc_checkpoint_dict(checkpoint_dict):
   field_names = ["iteration", "params", "net_state", "opt_state", "key",
-                 "num_ensembled", "ensemble_predictions"]
+                 "num_ensembled", "predictions", "ensemble_predictions"]
   return [checkpoint_dict[name] for name in field_names]

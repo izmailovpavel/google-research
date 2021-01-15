@@ -16,9 +16,9 @@
 """Optix implementations of SGMCMC optimizers."""
 
 import jax
-from jax.experimental.optix import OptState
+from optax import OptState
 from jax import numpy as jnp
-from jax.experimental.optix import GradientTransformation
+from optax import GradientTransformation
 
 from bnn_hmc.utils import tree_utils
 

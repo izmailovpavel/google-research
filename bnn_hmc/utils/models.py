@@ -19,6 +19,7 @@ from typing import Tuple
 import haiku as hk
 import jax
 import jax.numpy as jnp
+import functools
 
 
 Batch = Tuple[jnp.ndarray, jnp.ndarray]
@@ -96,6 +97,7 @@ def make_resnet_fn(
     normalization_layer,
     width: int = 16,
     use_bias: bool = True,
+    activation=jax.nn.relu,
 ):
   num_res_blocks = (depth - 2) // 6
   if (depth - 2) % 6 != 0:
@@ -105,7 +107,7 @@ def make_resnet_fn(
     num_filters = width
     x, _ = batch
     x = _resnet_layer(
-        x, num_filters=num_filters, activation=jax.nn.relu, use_bias=use_bias,
+        x, num_filters=num_filters, activation=activation, use_bias=use_bias,
         normalization_layer=normalization_layer
     )
     for stack in range(3):
@@ -114,7 +116,7 @@ def make_resnet_fn(
         if stack > 0 and res_block == 0:  # first layer but not first stack
           strides = 2  # downsample
         y = _resnet_layer(
-            x, num_filters=num_filters, strides=strides, activation=jax.nn.relu,
+            x, num_filters=num_filters, strides=strides, activation=activation,
             use_bias=use_bias, is_training=is_training,
             normalization_layer=normalization_layer)
         y = _resnet_layer(
@@ -126,7 +128,7 @@ def make_resnet_fn(
               x, num_filters=num_filters, kernel_size=1, strides=strides,
               use_bias=use_bias, is_training=is_training,
               normalization_layer=normalization_layer)
-        x = jax.nn.relu(x + y)
+        x = activation(x + y)
       num_filters *= 2
     x = hk.AvgPool((8, 8, 1), 8, 'VALID')(x)
     x = hk.Flatten()(x)
@@ -135,17 +137,19 @@ def make_resnet_fn(
   return forward
 
 
-def make_resnet20_fn(data_info):
+def make_resnet20_fn(data_info, activation=jax.nn.relu):
   num_classes = data_info["num_classes"]
   def normalization_layer(): hk.BatchNorm(**_DEFAULT_BN_CONFIG)
-  return make_resnet_fn(num_classes, depth=20,
-                        normalization_layer=normalization_layer)
+  return make_resnet_fn(
+      num_classes, depth=20, normalization_layer=normalization_layer,
+      activation=activation)
 
 
-def make_resnet20_frn_fn(data_info):
+def make_resnet20_frn_fn(data_info, activation=jax.nn.relu):
   num_classes = data_info["num_classes"]
-  return make_resnet_fn(num_classes, depth=20,
-                        normalization_layer=FeatureResponseNorm)
+  return make_resnet_fn(
+      num_classes, depth=20, normalization_layer=FeatureResponseNorm,
+      activation=activation)
 
 
 def make_cnn_lstm(
@@ -197,7 +201,6 @@ def make_mlp(layer_dims, output_dim):
     for layer_dim in layer_dims:
       x = hk.Linear(layer_dim)(x)
       x = jax.nn.relu(x)
-      # x = jax.nn.swish(x)
     x = hk.Linear(output_dim)(x)
     return x
   return forward
@@ -226,6 +229,8 @@ def get_model(model_name, data_info, **kwargs):
     "lenet": make_lenet_fn,
     "resnet20": make_resnet20_fn,
     "resnet20_frn": make_resnet20_frn_fn,
+    "resnet20_frn_swish": functools.partial(
+      make_resnet20_frn_fn, activation=jax.nn.swish),
     "cnn_lstm": make_cnn_lstm,
     "smooth_cnn_lstm": make_smooth_cnn_lstm,
     "mlp_regression": make_mlp_regression,

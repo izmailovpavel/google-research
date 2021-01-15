@@ -31,6 +31,7 @@ from bnn_hmc.utils import checkpoint_utils
 from bnn_hmc.utils import cmd_args_utils
 from bnn_hmc.utils import logging_utils
 from bnn_hmc.utils import train_utils
+from bnn_hmc.utils import precision_utils
 
 
 parser = argparse.ArgumentParser(description="Run SGD on a cloud TPU")
@@ -65,6 +66,7 @@ def train_model():
     args.dataset_name, dtype)
   
   net_apply, net_init = models.get_model(args.model_name, data_info)
+  net_apply = precision_utils.rewrite_high_precision(net_apply)
 
   (likelihood_factory, predict_fn, ensemble_upd_fn, metrics_fns,
    tabulate_metrics) = train_utils.get_task_specific_fns(task, data_info)

@@ -22,10 +22,19 @@ import tensorflow.compat.v2 as tf
 import argparse
 import time
 import numpy as onp
+from collections import OrderedDict
 
 from core import sgmcmc
-from utils import checkpoint_utils, cmd_args_utils, logging_utils, \
-  precision_utils, train_utils, tree_utils, metrics, data_utils, models, losses
+from bnn_hmc.utils import checkpoint_utils
+from bnn_hmc.utils import cmd_args_utils
+from bnn_hmc.utils import logging_utils
+from bnn_hmc.utils import precision_utils
+from bnn_hmc.utils import train_utils
+from bnn_hmc.utils import tree_utils
+from bnn_hmc.utils import metrics
+from bnn_hmc.utils import data_utils
+from bnn_hmc.utils import models
+from bnn_hmc.utils import losses
 
 parser = argparse.ArgumentParser(description="Run SGD on a cloud TPU")
 cmd_args_utils.add_common_flags(parser)
@@ -60,19 +69,20 @@ def train_model():
   os.makedirs(dirname, exist_ok=True)
   tf_writer = tf.summary.create_file_writer(dirname)
   cmd_args_utils.save_cmd(dirname, tf_writer)
-  
+
   dtype = jnp.float64 if args.use_float64 else jnp.float32
-  train_set, test_set, num_classes = data_utils.make_ds_pmap_fullbatch(
+  train_set, test_set, task, data_info = data_utils.make_ds_pmap_fullbatch(
     args.dataset_name, dtype)
-  
-  net_apply, net_init = models.get_model(args.model_name, num_classes)
+
+  net_apply, net_init = models.get_model(args.model_name, data_info)
   net_apply = precision_utils.rewrite_high_precision(net_apply)
-  
-  log_likelihood_fn = losses.make_xent_log_likelihood(
-      num_classes, args.temperature)
-  log_prior_fn, _ = losses.make_gaussian_log_prior(
-      args.weight_decay, args.temperature)
-  
+
+  (likelihood_factory, predict_fn, ensemble_upd_fn, metrics_fns,
+   tabulate_metrics) = train_utils.get_task_specific_fns(task, data_info)
+  log_likelihood_fn = likelihood_factory(args.temperature)
+  log_prior_fn, log_prior_diff_fn = losses.make_gaussian_log_prior(
+    args.weight_decay, args.temperature)
+
   num_data = jnp.size(train_set[1])
   num_batches = num_data // args.batch_size
   num_devices = len(jax.devices())
@@ -89,14 +99,14 @@ def train_model():
   if status == checkpoint_utils.InitStatus.LOADED_PREEMPTED:
     print("Continuing the run from the last saved checkpoint")
     (start_iteration, params, net_state, opt_state, key, num_ensembled,
-     ensemble_predicted_probs) = (
+     _, ensemble_predicted_probs) = (
       checkpoint_utils.parse_sgmcmc_checkpoint_dict(checkpoint_dict))
     
   else:
     key, net_init_key = jax.random.split(jax.random.PRNGKey(args.seed), 2)
     start_iteration = 0
     num_ensembled = 0
-    ensemble_predicted_probs = None
+    ensemble_predictions = None
     key = jax.random.split(key, num_devices)
   
     if status == checkpoint_utils.InitStatus.INIT_CKPT:
@@ -113,11 +123,10 @@ def train_model():
     else:
       raise ValueError("Unknown initialization status: {}".format(status))
     
-  sgmcmc_train_epoch, evaluate = train_utils.make_sgd_train_epoch(
+  sgmcmc_train_epoch = train_utils.make_sgd_train_epoch(
     net_apply, log_likelihood_fn, log_prior_fn, optimizer, num_batches)
-  ensemble_acc = None
 
-  param_types = tree_utils._get_types(params)
+  param_types = tree_utils.tree_get_types(params)
   assert all([p_type == dtype for p_type in param_types]), (
     "Params data types {} do not match specified data type {}".format(
       param_types, dtype))
@@ -128,71 +137,73 @@ def train_model():
     params, net_state, opt_state, logprob_avg, key = sgmcmc_train_epoch(
       params, net_state, opt_state, train_set, key)
     iteration_time = time.time() - start_time
-    
-    tabulate_dict = OrderedDict()
-    tabulate_dict["iteration"] = iteration
-    tabulate_dict["step_size"] = lr_schedule(opt_state.count)
-    tabulate_dict["train_logprob"] = logprob_avg
-    tabulate_dict["train_acc"] = None
-    tabulate_dict["test_logprob"] = None
-    tabulate_dict["test_acc"] = None
-    tabulate_dict["ensemble_acc"] = ensemble_acc
-    tabulate_dict["n_ens"] = num_ensembled
-    tabulate_dict["time"] = iteration_time
-    
-    with tf_writer.as_default():
-      tf.summary.scalar("train/log_prob_running", logprob_avg, step=iteration)
-      tf.summary.scalar("hypers/step_size", lr_schedule(opt_state.count),
-                        step=iteration)
-      tf.summary.scalar("debug/iteration_time", iteration_time, step=iteration)
-    
+
+    # Evaluation
+    train_stats = {"log_prob": logprob_avg}
+    test_stats = {}
+    is_evaluation_epoch = (
+      (iteration % args.eval_freq == 0) or (iteration == args.num_epochs - 1))
+    is_ensembling_epoch = ((iteration > args.num_burnin_epochs) and
+      ((iteration - args.num_burnin_epochs) % args.ensemble_freq == 0))
+
+    if is_evaluation_epoch or is_ensembling_epoch:
+      test_predictions = onp.asarray(
+        predict_fn(net_apply, params, net_state, test_set))
+      train_predictions = onp.asarray(
+        predict_fn(net_apply, params, net_state, train_set))
+      test_stats = train_utils.evaluate_metrics(
+        test_predictions, test_set[1], metrics_fns)
+      train_stats = train_utils.evaluate_metrics(
+        train_predictions, train_set[1], metrics_fns)
+      train_stats["prior"] = log_prior_fn(params)
+
+    # Ensembling
+    if is_ensembling_epoch:
+      ensemble_predictions = ensemble_upd_fn(
+        ensemble_predictions, num_ensembled, test_predictions)
+      ensemble_stats = train_utils.evaluate_metrics(
+        ensemble_predictions, test_set[1], metrics_fns)
+      num_ensembled += 1
+    else:
+      ensemble_stats = {}
+      ensemble_predictions = None
+      test_predictions = None
+
+    # Checkpoint
     if iteration % args.save_freq == 0 or iteration == args.num_epochs - 1:
       checkpoint_name = checkpoint_utils.make_checkpoint_name(iteration)
       checkpoint_path = os.path.join(dirname, checkpoint_name)
       checkpoint_dict = checkpoint_utils.make_sgmcmc_checkpoint_dict(
         iteration, params, net_state, opt_state, key, num_ensembled,
-        ensemble_predicted_probs)
+        test_predictions, ensemble_predictions)
       checkpoint_utils.save_checkpoint(checkpoint_path, checkpoint_dict)
-    
-    if (iteration % args.eval_freq == 0) or (iteration == args.num_epochs - 1):
-      test_log_prob, test_acc, test_ce, _ = evaluate(params, net_state,
-                                                     test_set)
-      train_log_prob, train_acc, train_ce, prior = (
-        evaluate(params, net_state, train_set))
 
-      tabulate_dict["train_logprob"] = train_log_prob
-      tabulate_dict["test_logprob"] = test_log_prob
-      tabulate_dict["train_acc"] = train_acc
-      tabulate_dict["test_acc"] = test_acc
-      with tf_writer.as_default():
-        tf.summary.scalar("train/log_prob", train_log_prob, step=iteration)
-        tf.summary.scalar("test/log_prob", test_log_prob, step=iteration)
-        tf.summary.scalar("train/log_likelihood", train_ce, step=iteration)
-        tf.summary.scalar("test/log_likelihood", test_ce, step=iteration)
-        tf.summary.scalar("train/accuracy", train_acc, step=iteration)
-        tf.summary.scalar("test/accuracy", test_acc, step=iteration)
+    # Logging
+    other_logs = {
+      "telemetry/iteration": iteration,
+      "telemetry/iteration_time": iteration_time,
+      "telemetry/num_ensembled": num_ensembled,
+      "hypers/step_size": lr_schedule(opt_state.count),
+      "hypers/weight_decay": args.weight_decay,
+      "hypers/temperature": args.temperature,
+    }
+    logging_dict = logging_utils.make_logging_dict(
+      train_stats, test_stats, ensemble_stats)
+    logging_dict.update(other_logs)
 
-    if ((iteration > args.num_burnin_epochs) and
-        ((iteration - args.num_burnin_epochs) % args.ensemble_freq == 0)):
-      ensemble_predicted_probs, ensemble_acc, num_ensembled = (
-          train_utils.update_ensemble(
-              net_apply, params, net_state, test_set, num_ensembled,
-              ensemble_predicted_probs))
-      tabulate_dict["ensemble_acc"] = ensemble_acc
-      tabulate_dict["n_ens"] = num_ensembled
-      test_labels = onp.asarray(test_set[1])
-      
-      ensemble_nll = metrics.nll(ensemble_predicted_probs, test_labels)
-      ensemble_calibration = metrics.calibration_curve(
-          ensemble_predicted_probs, test_labels)
-      
-      with tf_writer.as_default():
-        tf.summary.scalar("test/ens_accuracy", ensemble_acc, step=iteration)
-        tf.summary.scalar(
-            "test/ens_ece", ensemble_calibration["ece"], step=iteration)
-        tf.summary.scalar("test/ens_nll", ensemble_nll, step=iteration)
-        tf.summary.scalar("debug/n_ens", num_ensembled, step=iteration)
-    
+    with tf_writer.as_default():
+      for stat_name, stat_val in logging_dict.items():
+        tf.summary.scalar(stat_name, stat_val, step=iteration)
+    tabulate_dict = OrderedDict()
+    tabulate_dict["i"] = iteration
+    tabulate_dict["t"] = iteration_time
+    tabulate_dict["lr"] = lr_schedule(opt_state.count)
+    for metric_name in tabulate_metrics:
+      if metric_name in logging_dict:
+        tabulate_dict[metric_name] = logging_dict[metric_name]
+      else:
+        tabulate_dict[metric_name] = None
+
     table = logging_utils.make_table(
       tabulate_dict, iteration - start_iteration, args.tabulate_freq)
     print(table)

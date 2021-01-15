@@ -32,6 +32,8 @@ from bnn_hmc.utils import cmd_args_utils
 from bnn_hmc.utils import logging_utils
 from bnn_hmc.utils import train_utils
 from bnn_hmc.utils import tree_utils
+from bnn_hmc.utils import precision_utils
+
 
 parser = argparse.ArgumentParser(description="Run an HMC chain on a cloud TPU")
 cmd_args_utils.add_common_flags(parser)
@@ -80,6 +82,7 @@ def train_model():
     args.dataset_name, dtype)
 
   net_apply, net_init = models.get_model(args.model_name, data_info)
+  net_apply = precision_utils.rewrite_high_precision(net_apply)
   
   checkpoint_dict, status = checkpoint_utils.initialize(
       dirname, args.init_checkpoint)
@@ -161,14 +164,6 @@ def train_model():
                key, step_size, trajectory_len, do_mh_correction))
     iteration_time = time.time() - start_time
 
-    # Save the checkpoint
-    checkpoint_name = checkpoint_utils.make_checkpoint_name(iteration)
-    checkpoint_path = os.path.join(dirname, checkpoint_name)
-    checkpoint_dict = checkpoint_utils.make_hmc_checkpoint_dict(
-        iteration, params, net_state, key, step_size, accepted, num_ensembled,
-        ensemble_predictions)
-    checkpoint_utils.save_checkpoint(checkpoint_path, checkpoint_dict)
-
     # Evaluation
     test_predictions = onp.asarray(
       predict_fn(net_apply, params, net_state, test_set))
@@ -180,7 +175,7 @@ def train_model():
       train_predictions, train_set[1], metrics_fns)
     train_stats["prior"] = log_prior_fn(params)
 
-
+    # Ensembling
     if ((not in_burnin) and accepted) or args.no_mh:
       ensemble_predictions = ensemble_upd_fn(
         ensemble_predictions, num_ensembled, test_predictions)
@@ -190,12 +185,21 @@ def train_model():
     else:
       ensemble_stats = {}
 
+    # Save the checkpoint
+    checkpoint_name = checkpoint_utils.make_checkpoint_name(iteration)
+    checkpoint_path = os.path.join(dirname, checkpoint_name)
+    checkpoint_dict = checkpoint_utils.make_hmc_checkpoint_dict(
+      iteration, params, net_state, key, step_size, accepted, num_ensembled,
+      ensemble_predictions)
+    checkpoint_utils.save_checkpoint(checkpoint_path, checkpoint_dict)
+
     # Logging
     other_logs = {
       "telemetry/iteration": iteration,
       "telemetry/iteration_time": iteration_time,
       "telemetry/accept_prob": accept_prob,
       "telemetry/accepted": accepted,
+      "telemetry/num_ensembled": num_ensembled,
       "hypers/step_size": step_size,
       "hypers/trajectory_len": trajectory_len,
       "hypers/weight_decay": args.weight_decay,
