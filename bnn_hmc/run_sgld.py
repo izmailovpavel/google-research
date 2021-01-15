@@ -99,7 +99,7 @@ def train_model():
   if status == checkpoint_utils.InitStatus.LOADED_PREEMPTED:
     print("Continuing the run from the last saved checkpoint")
     (start_iteration, params, net_state, opt_state, key, num_ensembled,
-     _, ensemble_predicted_probs) = (
+     _, ensemble_predictions) = (
       checkpoint_utils.parse_sgmcmc_checkpoint_dict(checkpoint_dict))
     
   else:
