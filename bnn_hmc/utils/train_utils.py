@@ -159,7 +159,7 @@ def make_hmc_update(
   
   def _perdevice_log_prob_and_grad(dataset, params, net_state):
     # Only call inside pmap
-    likelihood, likelihood_grad, prior, prior_grad, _, net_state = (
+    likelihood, likelihood_grad, prior, prior_grad, net_state = (
         perdevice_likelihood_prior_and_grads_fn(params, net_state, dataset))
     likelihood = jax.lax.psum(likelihood, axis_name='i')
     likelihood_grad = jax.lax.psum(likelihood_grad, axis_name='i')
