@@ -102,29 +102,23 @@ def get_task_specific_fns(task, data_info):
   return likelihood_fn, predict_fn, ensemble_fn, metrics_fns, tabulate_metrics
 
 
-def _make_perdevice_likelihood_prior_acc_grad_fns(
+def _make_perdevice_likelihood_prior_grad_fns(
     net_apply, log_likelihood_fn, log_prior_fn
 ):
   """Make functions for training and evaluation.
-  
+
   Functions return likelihood, prior and gradients separately. These values
   can be combined differently for full-batch and mini-batch methods.
   """
   def likelihood_prior_and_grads_fn(params, net_state, batch):
-    loss_acc_val_grad = jax.value_and_grad(
+    loss_val_grad = jax.value_and_grad(
         log_likelihood_fn, has_aux=True, argnums=1)
-    (likelihood, (acc, net_state)), likelihood_grad = loss_acc_val_grad(
+    (likelihood, net_state), likelihood_grad = loss_val_grad(
         net_apply, params, net_state, batch, is_training=True)
     prior, prior_grad = jax.value_and_grad(log_prior_fn)(params)
-    return likelihood, likelihood_grad, prior, prior_grad, acc, net_state
-  
-  def likelihood_prior_and_acc_fn(params, net_state, batch, is_training):
-    likelihood, (acc, net_state) = log_likelihood_fn(
-        net_apply, params, net_state, batch, is_training=is_training)
-    prior = log_prior_fn(params)
-    return likelihood, prior, acc, net_state
+    return likelihood, likelihood_grad, prior, prior_grad, net_state
 
-  return likelihood_prior_and_grads_fn, likelihood_prior_and_acc_fn
+  return likelihood_prior_and_grads_fn
 
 
 def _make_perdevice_minibatch_log_prob_and_grad(
@@ -132,7 +126,7 @@ def _make_perdevice_minibatch_log_prob_and_grad(
 ):
   """Make log-prob and grad function for mini-batch methods."""
   def perdevice_log_prob_and_grad(dataset, params, net_state):
-      likelihood, likelihood_grad, prior, prior_grad, _, net_state = (
+      likelihood, likelihood_grad, prior, prior_grad, net_state = (
         perdevice_likelihood_prior_and_grads_fn(params, net_state, dataset))
       likelihood = jax.lax.psum(likelihood, axis_name='i')
       likelihood_grad = jax.lax.psum(likelihood_grad, axis_name='i')
@@ -159,8 +153,8 @@ def make_hmc_update(
 ):
   """Make update and ev0al functions for HMC training."""
 
-  perdevice_likelihood_prior_and_grads_fn, likelihood_prior_and_acc_fn = (
-    _make_perdevice_likelihood_prior_acc_grad_fns(
+  perdevice_likelihood_prior_and_grads_fn = (
+    _make_perdevice_likelihood_prior_grad_fns(
       net_apply, log_likelihood_fn, log_prior_fn))
   
   def _perdevice_log_prob_and_grad(dataset, params, net_state):
@@ -226,8 +220,6 @@ def make_hmc_update(
             likelihood[0], net_state)
 
   return update, get_log_prob_and_grad
-  # return (update, get_log_prob_and_grad,
-  #         _make_eval_fn(likelihood_prior_and_acc_fn))
 
 
 def make_sgd_train_epoch(
@@ -236,8 +228,8 @@ def make_sgd_train_epoch(
   """
   Make a training epoch function for SGD-like optimizers.
   """
-  perdevice_likelihood_prior_and_grads_fn, likelihood_prior_and_acc_fn = (
-    _make_perdevice_likelihood_prior_acc_grad_fns(
+  perdevice_likelihood_prior_and_grads_fn = (
+    _make_perdevice_likelihood_prior_grad_fns(
       net_apply, log_likelihood_fn, log_prior_fn))
 
   _perdevice_log_prob_and_grad = _make_perdevice_minibatch_log_prob_and_grad(

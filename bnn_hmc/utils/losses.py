@@ -42,12 +42,8 @@ def make_xent_log_likelihood(temperature):
     num_classes = logits.shape[-1]
     labels = jax.nn.one_hot(y, num_classes)
     softmax_xent = jnp.sum(labels * jax.nn.log_softmax(logits)) / temperature
-  
-    accuracy = jnp.mean(jnp.argmax(logits, axis=-1) == y)
-    statistics = {
-      "accuracy": accuracy
-    }
-    return softmax_xent, (statistics, net_state)
+
+    return softmax_xent, net_state
   return xent_log_likelihood
 
 
@@ -99,12 +95,6 @@ def make_gaussian_likelihood(temperature):
     log_likelihood = (-0.5 * se / tempered_std**2
                       - 0.5 * jnp.log(tempered_std**2 * 2 * math.pi))
     log_likelihood = jnp.sum(log_likelihood)
-    mse = jnp.mean(se)
     
-    statistics = {
-      "mse": mse,
-      "nll": -log_likelihood / len(y)
-    }
-    
-    return log_likelihood, (statistics, net_state)
+    return log_likelihood, net_state
   return gaussian_log_likelihood
