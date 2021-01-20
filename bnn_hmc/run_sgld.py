@@ -24,7 +24,7 @@ import time
 import numpy as onp
 from collections import OrderedDict
 
-from core import sgmcmc
+from bnn_hmc.core import sgmcmc
 from bnn_hmc.utils import checkpoint_utils
 from bnn_hmc.utils import cmd_args_utils
 from bnn_hmc.utils import logging_utils
