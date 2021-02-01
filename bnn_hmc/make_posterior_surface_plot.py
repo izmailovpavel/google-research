@@ -24,13 +24,19 @@ from haiku._src.data_structures import FlatMapping
 import functools
 import tqdm
 
-from utils import checkpoint_utils, cmd_args_utils, train_utils, tree_utils, \
-  data_utils, models, losses
+from bnn_hmc.utils import checkpoint_utils
+from bnn_hmc.utils import cmd_args_utils
+from bnn_hmc.utils import precision_utils
+from bnn_hmc.utils import train_utils
+from bnn_hmc.utils import tree_utils
+from bnn_hmc.utils import data_utils
+from bnn_hmc.utils import models
+from bnn_hmc.utils import losses
 
 from matplotlib import pyplot as plt
 
 
-parser = argparse.ArgumentParser(description="Run an HMC chain on a cloud TPU")
+parser = argparse.ArgumentParser(description="Compute posterior surface plots")
 cmd_args_utils.add_common_flags(parser)
 parser.add_argument("--limit_bottom", type=float, default=-0.25,
                     help="Limit of the loss surface visualization along the"
@@ -54,7 +60,7 @@ parser.add_argument("--checkpoint3", type=str, required=True,
                     help="Path to the third checkpoint")
 
 args = parser.parse_args()
-train_utils.set_up_jax(args.tpu_ip)
+train_utils.set_up_jax(args.tpu_ip, args.use_float64)
 
 
 def get_u_v_o(params1, params2, params3):
@@ -83,23 +89,26 @@ def run_visualization():
   os.makedirs(dirname, exist_ok=True)
   cmd_args_utils.save_cmd(dirname, None)
   
-  train_set, test_set, num_classes = data_utils.make_ds_pmap_fullbatch(
-    name=args.dataset_name)
-  
-  net_apply, _ = models.get_model(args.model_name, num_classes)
-  net_state = FlatMapping({})
-  
-  log_likelihood_fn = losses.make_xent_log_likelihood(num_classes)
-  log_prior_fn, _ = (
-    losses.make_gaussian_log_prior(weight_decay=args.weight_decay))
+  dtype = jnp.float64 if args.use_float64 else jnp.float32
+  train_set, test_set, task, data_info = data_utils.make_ds_pmap_fullbatch(
+    args.dataset_name, dtype)
 
-  _, likelihood_prior_and_acc_fn = (
-    train_utils.make_perdevice_log_prob_acc_grad_fns(
-      net_apply, log_likelihood_fn, log_prior_fn))
+  net_apply, net_init = models.get_model(args.model_name, data_info)
+  net_apply = precision_utils.rewrite_high_precision(net_apply)
+  init_data = jax.tree_map(lambda elem: elem[0][:1], train_set)
+  net_init_key = jax.random.PRNGKey(0)
+  params, net_state = net_init(net_init_key, init_data, True)
+
+  (likelihood_factory, predict_fn, ensemble_upd_fn, metrics_fns,
+   tabulate_metrics) = train_utils.get_task_specific_fns(task, data_info)
+  log_likelihood_fn = likelihood_factory(args.temperature)
+  log_prior_fn, log_prior_diff_fn = losses.make_gaussian_log_prior(
+      args.weight_decay, args.temperature)
   
   def eval(params, net_state, dataset):
-    likelihood, prior, _, _ = likelihood_prior_and_acc_fn(
-      params, net_state, dataset, is_training=True)
+    likelihood, _ = log_likelihood_fn(
+      net_apply, params, net_state, dataset, is_training=True)
+    prior = log_prior_fn(params)
     likelihood = jax.lax.psum(likelihood, axis_name='i')
     log_prob = likelihood + prior
     return log_prob, likelihood, prior
