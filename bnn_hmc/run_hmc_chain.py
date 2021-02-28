@@ -79,7 +79,7 @@ def train_model():
 
   dtype = jnp.float64 if args.use_float64 else jnp.float32
   train_set, test_set, task, data_info = data_utils.make_ds_pmap_fullbatch(
-    args.dataset_name, dtype)
+    args.dataset_name, dtype, truncate_to=args.subset_train_to)
 
   net_apply, net_init = models.get_model(args.model_name, data_info)
   net_apply = precision_utils.rewrite_high_precision(net_apply)
@@ -163,7 +163,6 @@ def train_model():
         update(train_set, params, net_state, log_likelihood, state_grad,
                key, step_size, trajectory_len, do_mh_correction))
     iteration_time = time.time() - start_time
-
     # Evaluation
     test_predictions = onp.asarray(
       predict_fn(net_apply, params, net_state, test_set))

@@ -239,9 +239,8 @@ def batch_split_axis(batch, n_split):
   return tuple(arr.reshape([n_split, n_new, *arr.shape[1:]]) for arr in (x, y))
 
 
-def pmap_dataset(ds, n_devices=None):
+def pmap_dataset(ds, n_devices):
   """Shard the dataset to devices."""
-  n_devices = n_devices or len(jax.local_devices())
   n_data = len(ds[0])
   if n_data % n_devices:
     new_len = n_devices * (n_data // n_devices)
@@ -253,9 +252,10 @@ def pmap_dataset(ds, n_devices=None):
   return jax.pmap(lambda x: x)(batch_split_axis(ds, n_devices))
   
 
-def make_ds_pmap_fullbatch(name, dtype, n_devices=None):
+def make_ds_pmap_fullbatch(name, dtype, n_devices=None, truncate_to=None):
   """Make train and test sets sharded over batch dim."""
   name = name.lower()
+  n_devices = n_devices or len(jax.local_devices())
   if name in ImgDatasets._value2member_map_:
     train_set, test_set, data_info = get_image_dataset(name)
     loaded = True
@@ -281,10 +281,18 @@ def make_ds_pmap_fullbatch(name, dtype, n_devices=None):
   if not loaded:
     raise ValueError("Unknown dataset name: {}".format(name))
 
+  if truncate_to:
+    assert truncate_to % n_devices == 0, (
+      "truncate_to should be devisible by n_devices, but got values "
+      "truncate_to={}, n_devices={}".format(truncate_to, n_devices)
+    )
+    train_set = tuple(arr[:truncate_to] for arr in train_set)
+
+
   train_set, test_set = tuple(pmap_dataset(ds, n_devices)
                               for ds in (train_set, test_set))
 
   train_set, test_set = map(
       lambda ds: (ds[0].astype(dtype), ds[1]), (train_set, test_set))
-  
+
   return train_set, test_set, task, data_info

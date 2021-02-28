@@ -37,6 +37,9 @@ def add_common_flags(parser):
                       help="Directory for checkpoints and tensorboard logs")
   parser.add_argument("--dataset_name", type=str, default="cifar10",
                       help="Name of the dataset")
+  parser.add_argument("--subset_train_to", type=int, default=None,
+                      help="Size of the subset of train data to use; "
+                           "full dataset is used by default")
   parser.add_argument("--model_name", type=str, default="lenet",
                       help="Name of the dataset")
   parser.add_argument("--use_float64", dest="use_float64", action="store_true",
