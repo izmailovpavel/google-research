@@ -89,3 +89,14 @@ def sghmc_gradient_update(step_size_fn, momentum_decay, seed):
         count=state.count + 1, rng_key=new_key, momentum=momentum)
 
   return GradientTransformation(init_fn, update_fn)
+
+
+def get_sgmcmc_optimizer(lr_schedule, args):
+  method_name = args.method_name
+
+  if method_name.lower() == "sgld":
+    return sgld_gradient_update(lr_schedule, args.seed)
+  elif method_name.lower() == "sghmc":
+    return sghmc_gradient_update(lr_schedule, args.sghmc_momentum, args.seed)
+  else:
+    raise ValueError("Unknown SG-MCMC method {}".format(method_name))
