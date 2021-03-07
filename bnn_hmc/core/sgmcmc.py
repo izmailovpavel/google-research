@@ -13,27 +13,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Optix implementations of SGMCMC optimizers."""
+"""Optax implementations of SGMCMC optimizers."""
 
 import jax
 from optax import OptState
 from jax import numpy as jnp
 from optax import GradientTransformation
+from typing import Any
 
 from bnn_hmc.utils import tree_utils
 
 
-class OptixSGLDState(OptState):
-  """Optix state for the SGLD optimizer"""
+Momentum = Any
+
+
+class OptaxSGLDState(OptState):
+  """Optax state for the SGLD optimizer"""
   count: jnp.ndarray
   rng_key: jnp.ndarray
   
   
 def sgld_gradient_update(step_size_fn, seed):
-  """Optix implementation of the SGLD optimizer"""
+  """Optax implementation of the SGLD optimizer"""
 
   def init_fn(_):
-    return OptixSGLDState(count=jnp.zeros([], jnp.int32),
+    return OptaxSGLDState(count=jnp.zeros([], jnp.int32),
                           rng_key=jax.random.PRNGKey(seed))
   
   def update_fn(updates, state, params=None):
@@ -47,8 +51,41 @@ def sgld_gradient_update(step_size_fn, seed):
     
     # apply lr schedule
     updates = jax.tree_map(lambda g: g * lr, updates)
-    return updates, OptixSGLDState(
+    return updates, OptaxSGLDState(
         count=state.count + 1, rng_key=new_key)
   
   return GradientTransformation(init_fn, update_fn)
-  
+
+
+class OptaxSGHMCState(OptState):
+  """Optax state for the SGHMC optimizer"""
+  count: jnp.ndarray
+  rng_key: jnp.ndarray
+  momentum: Momentum
+
+
+def sghmc_gradient_update(step_size_fn, momentum_decay, seed):
+  """Optax implementation of the SGHMC optimizer"""
+
+  def init_fn(params):
+    return OptaxSGHMCState(count=jnp.zeros([], jnp.int32),
+                           rng_key=jax.random.PRNGKey(seed),
+                           momentum=jax.tree_map(jnp.zeros_like, params))
+
+  def update_fn(updates, state, params=None):
+    del params
+    lr = step_size_fn(state.count)
+    noise_std = jnp.sqrt(2 * lr * (1 - momentum_decay))
+
+    noise, new_key = tree_utils.normal_like_tree(updates, state.rng_key)
+
+    def update_momentum(m, g, n):
+      return momentum_decay * m + g * lr + n * noise_std
+
+    momentum = jax.tree_multimap(
+        update_momentum, state.momentum, updates, noise)
+
+    return momentum, OptaxSGHMCState(
+        count=state.count + 1, rng_key=new_key, momentum=momentum)
+
+  return GradientTransformation(init_fn, update_fn)
