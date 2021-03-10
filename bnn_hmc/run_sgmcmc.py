@@ -53,12 +53,13 @@ parser.add_argument("--save_freq", type=int, default=50,
                     help="Frequency of checkpointing (epochs)")
 parser.add_argument("--ensemble_freq", type=int, default=10,
                     help="Frequency of checkpointing (epochs)")
-parser.add_argument("--method_name", type=str, default="sgld",
-                    help="Name of the SG-MCMC method to use (default: sgld)")
 
-parser.add_argument("--sghmc_momentum", type=float, default=0.95,
-                    help="Momentum parameter of SGHMC;"
-                         "only used when SGHMC method is selected")
+parser.add_argument("--momentum", type=float, default=0.95,
+                    help="Momentum parameter of SGLD")
+parser.add_argument("--preconditioner", type=str, default="None",
+                    choices=["None", "RMSprop"],
+                    help="Choice of preconditioner to use with SGLD;"
+                    "None or RMSprop (Default: None)")
 
 
 args = parser.parse_args()
@@ -66,14 +67,11 @@ train_utils.set_up_jax(args.tpu_ip, args.use_float64)
 
 
 def train_model():
-  method_name = args.method_name
-  if method_name.lower() == "sghmc":
-    method_name += "_momentum_{}".format(args.sghmc_momentum)
   subdirname = (
-    "{}_wd_{}_stepsizes_{}_{}_batchsize_{}_epochs{}_{}_temp_{}_seed_{}".format(
-    method_name, args.weight_decay, args.init_step_size, args.final_step_size,
-    args.batch_size, args.num_epochs, args.num_burnin_epochs,
-    args.temperature, args.seed))
+    "sgld_mom_{}_preconditioner_{}_wd_{}_stepsizes_{}_{}_batchsize_{}_epochs{}_{}_temp_{}_seed_{}".format(
+    args.momentum, args.preconditioner, args.weight_decay, args.init_step_size,
+    args.final_step_size, args.batch_size, args.num_epochs,
+    args.num_burnin_epochs, args.temperature, args.seed))
   dirname = os.path.join(args.dir, subdirname)
   os.makedirs(dirname, exist_ok=True)
   tf_writer = tf.summary.create_file_writer(dirname)
@@ -100,8 +98,13 @@ def train_model():
   lr_schedule = train_utils.make_cosine_lr_schedule_with_burnin(
       args.init_step_size, args.final_step_size, burnin_steps
   )
-  optimizer = sgmcmc.get_sgmcmc_optimizer(lr_schedule, args)
-  # optimizer = get_optimizer_fn(lr_schedule, args.seed)
+  if args.preconditioner == "None":
+    preconditioner = None
+  else:
+    preconditioner = sgmcmc.get_rmsprop_preconditioner()
+  optimizer = sgmcmc.sgld_gradient_update(
+    lr_schedule, momentum_decay=args.momentum, seed=args.seed,
+    preconditioner=preconditioner)
   
   checkpoint_dict, status = checkpoint_utils.initialize(
     dirname, args.init_checkpoint)
@@ -147,6 +150,7 @@ def train_model():
     params, net_state, opt_state, logprob_avg, key = sgmcmc_train_epoch(
       params, net_state, opt_state, train_set, key)
     iteration_time = time.time() - start_time
+    print(opt_state.preconditioner_state)
 
     # Evaluation
     train_stats = {"log_prob": logprob_avg}
@@ -195,9 +199,8 @@ def train_model():
       "hypers/step_size": lr_schedule(opt_state.count),
       "hypers/weight_decay": args.weight_decay,
       "hypers/temperature": args.temperature,
+      "hypers/momentum": args.momentum
     }
-    if args.method_name.lower() == "sghmc":
-      other_logs["hypers/sghmc_momentum_decay"] = args.sghmc_momentum
 
     logging_dict = logging_utils.make_logging_dict(
       train_stats, test_stats, ensemble_stats)
