@@ -253,7 +253,7 @@ def make_sgd_train_epoch(
       loss, grad, net_state_ = _perdevice_log_prob_and_grad(
         batch, params_, net_state_)
       grad = jax.lax.psum(grad, axis_name='i')
-      
+
       updates, opt_state_ = optimizer.update(grad, opt_state_)
       params_ = optax.apply_updates(params_, updates)
       return (params_, net_state_, opt_state_), loss

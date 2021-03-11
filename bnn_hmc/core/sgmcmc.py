@@ -72,22 +72,22 @@ def sgld_gradient_update(
   def update_fn(gradient, state, params=None):
     del params
     lr = step_size_fn(state.count)
-    noise_std = jnp.sqrt(2 * lr * (1 - momentum_decay))
+    lr_sqrt = jnp.sqrt(lr)
+    noise_std = jnp.sqrt(2 * (1 - momentum_decay))
 
     preconditioner_state = preconditioner.update_preconditioner(
         gradient, state.preconditioner_state)
 
     noise, new_key = tree_utils.normal_like_tree(gradient, state.rng_key)
-    noise = preconditioner.multiply_by_m_sqrt(noise, state.preconditioner_state)
+    noise = preconditioner.multiply_by_m_sqrt(noise, preconditioner_state)
 
     def update_momentum(m, g, n):
-      return momentum_decay * m + g * lr + n * noise_std
+      return momentum_decay * m + g * lr_sqrt + n * noise_std
     momentum = jax.tree_multimap(
         update_momentum, state.momentum, gradient, noise)
-    updates = preconditioner.multiply_by_m_inv(
-        momentum, state.preconditioner_state)
-
-    return momentum, OptaxSGLDState(
+    updates = preconditioner.multiply_by_m_inv(momentum, preconditioner_state)
+    updates = jax.tree_map(lambda m: m * lr_sqrt, updates)
+    return updates, OptaxSGLDState(
         count=state.count + 1, rng_key=new_key, momentum=momentum,
         preconditioner_state=preconditioner_state
     )

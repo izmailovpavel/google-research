@@ -150,7 +150,6 @@ def train_model():
     params, net_state, opt_state, logprob_avg, key = sgmcmc_train_epoch(
       params, net_state, opt_state, train_set, key)
     iteration_time = time.time() - start_time
-    print(opt_state.preconditioner_state)
 
     # Evaluation
     train_stats = {"log_prob": logprob_avg}

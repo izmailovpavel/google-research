@@ -163,6 +163,7 @@ def train_model():
         update(train_set, params, net_state, log_likelihood, state_grad,
                key, step_size, trajectory_len, do_mh_correction))
     iteration_time = time.time() - start_time
+
     # Evaluation
     test_predictions = onp.asarray(
       predict_fn(net_apply, params, net_state, test_set))
