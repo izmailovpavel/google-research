@@ -31,6 +31,7 @@ from bnn_hmc.utils import checkpoint_utils
 from bnn_hmc.utils import cmd_args_utils
 from bnn_hmc.utils import logging_utils
 from bnn_hmc.utils import train_utils
+from bnn_hmc.utils import optim_utils
 from bnn_hmc.utils import precision_utils
 
 
@@ -79,9 +80,9 @@ def train_model():
   num_devices = len(jax.devices())
 
   total_steps = num_batches * args.num_epochs
-  lr_schedule = train_utils.make_cosine_lr_schedule(
+  lr_schedule = optim_utils.make_cosine_lr_schedule(
       args.init_step_size, total_steps)
-  optimizer = train_utils.make_optimizer(
+  optimizer = optim_utils.make_optimizer(
       lr_schedule, momentum_decay=args.momentum_decay)
   
   checkpoint_dict, status = checkpoint_utils.initialize(

@@ -30,6 +30,7 @@ from bnn_hmc.utils import cmd_args_utils
 from bnn_hmc.utils import logging_utils
 from bnn_hmc.utils import precision_utils
 from bnn_hmc.utils import train_utils
+from bnn_hmc.utils import optim_utils
 from bnn_hmc.utils import tree_utils
 from bnn_hmc.utils import metrics
 from bnn_hmc.utils import data_utils
@@ -38,14 +39,10 @@ from bnn_hmc.utils import losses
 
 parser = argparse.ArgumentParser(description="Run SGD on a cloud TPU")
 cmd_args_utils.add_common_flags(parser)
-parser.add_argument("--init_step_size", type=float, default=1.e-7,
-                    help="Initial SGD step size")
-parser.add_argument("--final_step_size", type=float, default=5.e-8,
-                    help="Initial SGD step size")
+
 parser.add_argument("--num_epochs", type=int, default=1000,
                     help="Total number of SGD epochs iterations")
-parser.add_argument("--num_burnin_epochs", type=int, default=300,
-                    help="Number of epochs before final lr is reached")
+
 parser.add_argument("--batch_size", type=int, default=80, help="Batch size")
 parser.add_argument("--eval_freq", type=int, default=10,
                     help="Frequency of evaluation (epochs)")
@@ -61,17 +58,41 @@ parser.add_argument("--preconditioner", type=str, default="None",
                     help="Choice of preconditioner to use with SGLD;"
                     "None or RMSprop (Default: None)")
 
+# Step size schedule
+parser.add_argument("--step_size_schedule", type=str, default="constant",
+                    choices=["constant", "cyclical"],
+                    help="Choice step size schedule;"
+                    "constant sets the step size to final_step_size "
+                    "after a cosine burn-in for num_burnin_epochs epochs;"
+                    "cyclical uses a constant burn-in for num_burnin_epochs "
+                    "epochs and then a cosine cyclical schedule"
+                    "(Default: constant)")
+parser.add_argument("--num_burnin_epochs", type=int, default=300,
+                    help="Number of epochs before final lr is reached")
+parser.add_argument("--init_step_size", type=float, default=1.e-7,
+                    help="Initial step size")
+parser.add_argument("--final_step_size", type=float, default=5.e-8,
+                    help="Final step size "
+                    "(used only with constant schedule; default: 5.e-8)")
+parser.add_argument("--step_size_cycle_length_epochs", type=float, default=50,
+                    help="Cycle length in epochs "
+                    "(used only with cyclic schedule; default: 50)")
 
 args = parser.parse_args()
 train_utils.set_up_jax(args.tpu_ip, args.use_float64)
 
 
 def train_model():
-  subdirname = (
-    "sgld_mom_{}_preconditioner_{}_wd_{}_stepsizes_{}_{}_batchsize_{}_epochs{}_{}_temp_{}_seed_{}".format(
-    args.momentum, args.preconditioner, args.weight_decay, args.init_step_size,
-    args.final_step_size, args.batch_size, args.num_epochs,
-    args.num_burnin_epochs, args.temperature, args.seed))
+  # Create folder to save experimental data
+  method_name = "sgld_mom_{}_preconditioner_{}".format(
+      args.momentum, args.preconditioner)
+  lr_schedule_name = "lr_sch_{}_i_{}_f_{}_c_{}_bi_{}".format(
+      args.step_size_schedule, args.init_step_size, args.final_step_size,
+      args.step_size_cycle_length_epochs, args.num_burnin_epochs)
+  hypers_name = "_epochs_{}_wd_{}_batchsize_{}_temp_{}".format(
+      args.num_epochs, args.weight_decay, args.batch_size, args.temperature)
+  subdirname = "{}__{}__{}__seed_{}".format(
+      method_name, lr_schedule_name, hypers_name, args.seed)
   dirname = os.path.join(args.dir, subdirname)
   os.makedirs(dirname, exist_ok=True)
   tf_writer = tf.summary.create_file_writer(dirname)
@@ -95,9 +116,15 @@ def train_model():
   num_devices = len(jax.devices())
   
   burnin_steps = num_batches * args.num_burnin_epochs
-  lr_schedule = train_utils.make_cosine_lr_schedule_with_burnin(
-      args.init_step_size, args.final_step_size, burnin_steps
-  )
+  if args.step_size_schedule.lower() =="constant":
+    lr_schedule = optim_utils.make_constant_lr_schedule_with_cosine_burnin(
+        args.init_step_size, args.final_step_size, burnin_steps)
+  else:
+    # Use cyclical schedule
+    cycle_steps = args.step_size_cycle_length_epochs * num_batches
+    lr_schedule = (
+        optim_utils.make_cyclcial_cosine_lr_schedule_with_const_burnin(
+            args.init_step_size, burnin_steps, cycle_steps))
   if args.preconditioner == "None":
     preconditioner = None
   else:
@@ -157,7 +184,7 @@ def train_model():
     is_evaluation_epoch = (
       (iteration % args.eval_freq == 0) or (iteration == args.num_epochs - 1))
     is_ensembling_epoch = ((iteration > args.num_burnin_epochs) and
-      ((iteration - args.num_burnin_epochs) % args.ensemble_freq == 0))
+      ((iteration - args.num_burnin_epochs + 1) % args.ensemble_freq == 0))
 
     if is_evaluation_epoch or is_ensembling_epoch:
       test_predictions = onp.asarray(

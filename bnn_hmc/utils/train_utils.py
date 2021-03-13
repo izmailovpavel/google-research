@@ -40,32 +40,6 @@ def set_up_jax(tpu_ip, use_float64):
   tf.config.set_visible_devices([], 'GPU')
 
 
-def make_cosine_lr_schedule(init_lr, total_steps):
-  """Cosine LR schedule."""
-  def schedule(step):
-    t = step / total_steps
-    return 0.5 * init_lr * (1 + jnp.cos(t * onp.pi))
-  return schedule
-
-
-def make_cosine_lr_schedule_with_burnin(
-    init_lr, final_lr, burnin_steps
-):
-  """Cosine LR schedule with burn-in for SG-MCMC."""
-  def schedule(step):
-    t = jnp.minimum(step / burnin_steps, 1.)
-    coef = (1 + jnp.cos(t * onp.pi)) * 0.5
-    return coef * init_lr + (1 - coef) * final_lr
-  return schedule
-
-
-def make_optimizer(lr_schedule, momentum_decay):
-  """Make SGD optimizer with momentum."""
-  # Maximize log-prob instead of minimizing loss
-  return optax.chain(optax.trace(decay=momentum_decay, nesterov=False),
-                     optax.scale_by_schedule(lr_schedule))
-
-
 def get_task_specific_fns(task, data_info):
   if task == data_utils.Task.CLASSIFICATION:
     likelihood_fn = losses.make_xent_log_likelihood
