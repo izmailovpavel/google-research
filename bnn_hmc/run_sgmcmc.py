@@ -48,6 +48,8 @@ parser.add_argument("--eval_freq", type=int, default=10,
                     help="Frequency of evaluation (epochs)")
 parser.add_argument("--save_freq", type=int, default=50,
                     help="Frequency of checkpointing (epochs)")
+parser.add_argument("--save_all_ensembled", type=bool, action="store_true",
+                    help="Save all the networks that are ensembled")
 parser.add_argument("--ensemble_freq", type=int, default=10,
                     help="Frequency of checkpointing (epochs)")
 
@@ -209,7 +211,13 @@ def train_model():
       test_predictions = None
 
     # Checkpoint
-    if iteration % args.save_freq == 0 or iteration == args.num_epochs - 1:
+    if args.save_all_ensembled:
+      is_save_epoch = is_ensembling_epoch
+    else:
+      is_save_epoch = (
+          iteration % args.save_freq == 0 or iteration == args.num_epochs - 1)
+
+    if is_save_epoch:
       checkpoint_name = checkpoint_utils.make_checkpoint_name(iteration)
       checkpoint_path = os.path.join(dirname, checkpoint_name)
       checkpoint_dict = checkpoint_utils.make_sgmcmc_checkpoint_dict(
