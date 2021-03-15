@@ -48,7 +48,7 @@ parser.add_argument("--eval_freq", type=int, default=10,
                     help="Frequency of evaluation (epochs)")
 parser.add_argument("--save_freq", type=int, default=50,
                     help="Frequency of checkpointing (epochs)")
-parser.add_argument("--save_all_ensembled", type=bool, action="store_true",
+parser.add_argument("--save_all_ensembled", action="store_true",
                     help="Save all the networks that are ensembled")
 parser.add_argument("--ensemble_freq", type=int, default=10,
                     help="Frequency of checkpointing (epochs)")
